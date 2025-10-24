@@ -34,135 +34,61 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
 #ifndef _DSP_CLIENT_H
 #define _DSP_CLIENT_H
 
 #include "jack_client.h"
 #include "freq_filter.h"
 #include "prealloc_ringbuffer.h"
+#include "hilbert_fir.h"  // NEW: Add this include
 #include <boost/circular_buffer.hpp>
 
-/**
- * Jack client class
- *
- * This class wraps some basic jack functionality.
- */
 class dsp_client : public jack::client {
 public:
-  // Modulation schemes enumeration
   enum class ModulationScheme {
-    SSB_USB,      // Single Sideband Upper Sideband
-    SSB_LSB,      // Single Sideband Lower Sideband
-    SSB_USB_SC,   // SSB USB Suppressed Carrier
-    SSB_LSB_SC,   // SSB LSB Suppressed Carrier
-    FSK_4         // 4-FSK
+    SSB_USB,      
+    SSB_LSB,      
+    SSB_USB_SC,   
+    SSB_LSB_SC,   
+    FSK_4         
   };
 
-  // Operating modes
   enum class Mode {
-    Passthrough,  // Direct audio bypass
-    Transmit,     // Modulation mode (WAV file input)
-    Receive,      // Demodulation mode (microphone input)
-    Stopped       // No processing
+    Passthrough,  
+    Transmit,     
+    Receive,      
+    Stopped       
   };
 
-  /**
-   * The default constructor performs some basic connections.
-   */
   dsp_client();
-  
-  /**
-   * Destructor
-   */
   ~dsp_client();
 
-  /**
-   * Initialize subclass-specific components
-   */
   virtual bool init_subclass() override;
-
-  /**
-   * DSP functionality - main processing callback
-   */
   virtual bool process(jack_nframes_t nframes,
                       const sample_t *const in,
                       sample_t *const out) override;
 
-  /**
-   * Return the last captured buffer
-   */
   const std::vector<sample_t>& last_buffer();
-
-  /**
-   * Return the current average output power
-   */
   float power() const;
-
-  /**
-   * Set the volume (0.0 to 2.0, where 1.0 is unity)
-   */
   void set_volume(float vol);
-
-  /**
-   * Get current volume setting
-   */
   float volume() const;
-
-  /**
-   * Set the current operating mode
-   */
   void set_mode(Mode mode);
-
-  /**
-   * Set transmit carrier frequency in Hz
-   */
   void set_transmit_carrier_freq(float freq);
-
-  /**
-   * Set receive carrier frequency in Hz
-   */
   void set_receive_carrier_freq(float freq);
-
-  /**
-   * Set transmit modulation scheme
-   */
   void set_transmit_modulation(ModulationScheme scheme);
-
-  /**
-   * Set receive modulation scheme
-   */
   void set_receive_modulation(ModulationScheme scheme);
-
-  /**
-   * Start processing (enable modulation/demodulation)
-   */
   void start_processing();
-
-  /**
-   * Stop processing
-   */
   void stop_processing();
-
-  /**
-   * Initialize the difference equation oscillator
-   * 
-   * @param freq Oscillator frequency in Hz
-   * @param amplitude Amplitude scaling factor
-   * @param window_size_seconds Time window for energy calculation
-   * @param signal_energy Total signal energy for normalization
-   */
   void play_sine(float freq, float amplitude);
 
 private:
-  // Filter and buffers
   freq_filter _ffilter;
   prealloc_ringbuffer< std::vector<sample_t> > _past_buffers;
   
-  // Power and volume
   float _power;
   float _volume;
 
-  // Current mode and configuration
   Mode _current_mode;
   ModulationScheme _tx_modulation;
   ModulationScheme _rx_modulation;
@@ -171,16 +97,22 @@ private:
   bool _processing_active;
 
   // Difference equation oscillator state (Proakis method)
-  // y(n) = a1*y(n-1) - y(n-2)
-  // where a1 = 2*cos(2π*f/Fs)
-  float _osc_y_n_minus_1;   // y(n-1) - previous output
-  float _osc_y_n_minus_2;   // y(n-2) - two samples ago
-  float _osc_a1;            // 2*cos(2π*f/Fs) coefficient
+  float _osc_y_n_minus_1;   
+  float _osc_y_n_minus_2;   
+  float _osc_a1;            
 
-  // Signal energy tracking
   float _signal_energy;
 
-  // Legacy variables (kept for compatibility, may be removed later)
+  // NEW: SSB-specific members
+  HilbertFIR* _hilbert_filter;           // Hilbert transform filter
+  boost::circular_buffer<sample_t> _message_delay;  // Group delay compensation
+  
+  // NEW: Quadrature oscillator for sine (90° phase shift)
+  float _osc_sin_y_n_minus_1;
+  float _osc_sin_y_n_minus_2;
+  float _osc_sin_a1;
+
+  // Legacy variables
   bool modFSK;
   bool modOn;
   bool modSSB;

@@ -37,26 +37,34 @@
 
 #include "dsp_client.h"
 #include "jack_client.h"
+#include "hilbert_filter_coeffs.h"  // NEW: Include filter coefficients
 #include <boost/circular_buffer.hpp>
-
 #include <cstring>
 #include <cmath>
+#include <iostream>
 
 dsp_client::dsp_client() : jack::client(),_ffilter(),
     _volume(1.0f),
     _current_mode(Mode::Stopped),
     _tx_modulation(ModulationScheme::SSB_USB),
     _rx_modulation(ModulationScheme::SSB_USB),
-    _tx_carrier_freq(1000.0f),
-    _rx_carrier_freq(1000.0f),
+    _tx_carrier_freq(10000.0f),
+    _rx_carrier_freq(10000.0f),
     _processing_active(false),
     _osc_y_n_minus_1(0.0f),
     _osc_y_n_minus_2(0.0f),
-    _osc_a1(0.0f)
+    _osc_a1(0.0f),
+    _hilbert_filter(nullptr),  // NEW
+    _osc_sin_y_n_minus_1(0.0f),  // NEW
+    _osc_sin_y_n_minus_2(0.0f),  // NEW
+    _osc_sin_a1(0.0f)  // NEW
 {
 }
 
 dsp_client::~dsp_client() {
+    if (_hilbert_filter) {
+        delete _hilbert_filter;
+    }
 }
 
 bool dsp_client::init_subclass() {
@@ -77,6 +85,15 @@ bool dsp_client::init_subclass() {
                          std::vector<float>(buffer_size(),float()));
   _past_buffers.push_back();
   
+  // NEW: Initialize Hilbert filter
+  _hilbert_filter = new HilbertFIR(hilbert::HILBERT_COEFFS, hilbert::FILTER_LENGTH);
+  
+  // NEW: Initialize message delay buffer (for group delay compensation)
+  _message_delay.set_capacity(hilbert::GROUP_DELAY);
+  for (size_t i = 0; i < hilbert::GROUP_DELAY; ++i) {
+      _message_delay.push_back(0.0f);
+  }
+  
   return true;
 }
 
@@ -88,7 +105,7 @@ bool dsp_client::process(jack_nframes_t nframes,
   const sample_t* endptr = in + nframes;
   sample_t* outptr = out;
 
-  // Process based on current mode - no function calls, everything inline
+  // Process based on current mode - everything inline
   switch(_current_mode) {
     case Mode::Passthrough:
       // Simple passthrough with volume control
@@ -101,62 +118,94 @@ bool dsp_client::process(jack_nframes_t nframes,
 
     case Mode::Transmit:
       if (_processing_active) {
-        // Input comes from WAV file
-        // Generate carrier using difference equation oscillator
-        // y(n) = -a1*y(n-1) - y(n-2)
-        // where a1 = -2*cos(ω0)
+        // SSB MODULATION (INLINE)
+        // Input: message signal from WAV file
+        // Output: SSB modulated signal
         
         while(inptr != endptr) {
-          // Difference equation oscillator (Proakis Eq. 4.52)
-          float y_n = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
+          // Step 1: Get message sample
+          float message = *inptr;
           
-          // TODO: Implement modulation schemes here based on _tx_modulation
-          // Modulate the input signal with the carrier
-          // For now, just output the carrier oscillator
-          *outptr = y_n * _volume * 0.5f;
+          // Step 2: Apply Hilbert transform to get m̂(t)
+          float message_hilbert = _hilbert_filter->process(message);
           
-          // Update oscillator state
+          // Step 3: Delay original message by group delay to synchronize
+          _message_delay.push_back(message);
+          float message_delayed = _message_delay.front();
+          
+          // Step 4: Generate carrier signals using difference equation oscillators
+          // Cosine: cos(ωc*t)
+          float carrier_cos = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
           _osc_y_n_minus_2 = _osc_y_n_minus_1;
-          _osc_y_n_minus_1 = y_n;
+          _osc_y_n_minus_1 = carrier_cos;
+          
+          // Sine: sin(ωc*t) - uses separate oscillator with 90° phase shift
+          float carrier_sin = -_osc_sin_a1 * _osc_sin_y_n_minus_1 - _osc_sin_y_n_minus_2;
+          _osc_sin_y_n_minus_2 = _osc_sin_y_n_minus_1;
+          _osc_sin_y_n_minus_1 = carrier_sin;
+          
+          // Step 5: Modulate based on sideband selection
+          float modulated;
+          if (_tx_modulation == ModulationScheme::SSB_USB || 
+              _tx_modulation == ModulationScheme::SSB_USB_SC) {
+            // USB: s(t) = m(t)*cos(ωc*t) - m̂(t)*sin(ωc*t)
+            modulated = message_delayed * carrier_cos - message_hilbert * carrier_sin;
+          } else {
+            // LSB: s(t) = m(t)*cos(ωc*t) + m̂(t)*sin(ωc*t)
+            modulated = message_delayed * carrier_cos + message_hilbert * carrier_sin;
+          }
+          
+          // Apply volume and output
+          *outptr = modulated * 20 * _volume;
           
           ++outptr;
           ++inptr;
         }
       } else {
-        // Not processing, output silence
         memset(out, 0, nframes * sizeof(sample_t));
       }
       break;
 
     case Mode::Receive:
       if (_processing_active) {
-        // Input comes from microphone
-        // Generate local oscillator for demodulation
+        // SSB DEMODULATION (INLINE)
+        // Input: received SSB signal from microphone
+        // Output: demodulated message signal
         
         while(inptr != endptr) {
-          // Difference equation oscillator for local carrier
-          float y_n = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
+          // Step 1: Get received SSB signal
+          float received = *inptr;
           
-          // TODO: Implement demodulation schemes here based on _rx_modulation
-          // Mix input with local oscillator for demodulation
-          // For now, just pass through
-          *outptr = *inptr * _volume;
-          
-          // Update oscillator state
+          // Step 2: Generate local oscillator (coherent carrier)
+          float local_cos = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
           _osc_y_n_minus_2 = _osc_y_n_minus_1;
-          _osc_y_n_minus_1 = y_n;
+          _osc_y_n_minus_1 = local_cos;
+          
+          // Step 3: Coherent detection (multiply by 2x carrier)
+          // This shifts the SSB signal back to baseband plus a high-freq component
+          float demod_raw = 2.0f * received * local_cos;
+          
+          // Step 4: Low-pass filter using Hilbert filter as makeshift LPF
+          // Note: In production, use a proper low-pass filter here
+          // The Hilbert filter acts as a bandpass, but works for demonstration
+          float demod_filtered = _hilbert_filter->process(demod_raw);
+          
+          // Step 5: Delay compensation
+          _message_delay.push_back(demod_filtered);
+          float demodulated = _message_delay.front();
+          
+          // Apply volume and output
+          *outptr = demodulated * _volume;
           
           ++outptr;
           ++inptr;
         }
       } else {
-        // Not processing, output silence
         memset(out, 0, nframes * sizeof(sample_t));
       }
       break;
 
     case Mode::Stopped:
-      // Output silence
       memset(out, 0, nframes * sizeof(sample_t));
       break;
   }
@@ -184,38 +233,54 @@ bool dsp_client::process(jack_nframes_t nframes,
 }
 
 void dsp_client::play_sine(float freq, float amplitude) {
-  // Initialize the difference equation oscillator
-  // Based on Proakis Eq. 4.52: y(n) = -a1*y(n-1) - y(n-2)
-  // where a1 = -2*cos(ω0) and a2 = 1
-  
-  // Normalized frequency
+  // Initialize BOTH cosine and sine oscillators
   const float norm_freq = freq / sample_rate();
+  const float avg_signal_power = (1.0f / (2.0f * sample_rate() + 1.0f) * 1000);
   
-  // Calculate average signal power to prevent saturation
-  const float avg_signal_power = (1.0f / (2.0f * sample_rate() + 1.0f));
+  // Coefficient: a1 = -2*cos(2π*f/Fs)
+  _osc_a1 = -2.0f * std::cos(2.0f * std::numbers::pi_v<float> * norm_freq);
+  _osc_sin_a1 = _osc_a1;  // Same coefficient for both
   
-  // Set coefficient: a1 = -2*cos(2π*norm_freq)
-  _osc_a1 = 2.0f * std::cos(2.0f * std::numbers::pi_v<float> * norm_freq);
+  // Initialize cosine oscillator: cos(ωn)
+  // y(-2) = cos(-2ω) = cos(2ω)
+  // y(-1) = cos(-ω) = cos(ω)
+  _osc_y_n_minus_2 = amplitude * std::sqrt(avg_signal_power) * 
+                     std::cos(2.0f * std::numbers::pi_v<float> * norm_freq);
+  _osc_y_n_minus_1 = amplitude * std::sqrt(avg_signal_power) * 
+                     std::cos(std::numbers::pi_v<float> * norm_freq);
   
-  // Set initial conditions to start oscillation with proper scaling
-  // y(-1) = 0
-  // y(-2) = -amplitude * sqrt(avg_signal_power) * sin(2π*norm_freq)
-  _osc_y_n_minus_1 = 0.0f;
-  _osc_y_n_minus_2 = -amplitude * std::sqrt(avg_signal_power) * std::sin(2.0f * std::numbers::pi_v<float> * norm_freq);
+  // Initialize sine oscillator: sin(ωn) with 90° phase shift
+  // y(-2) = sin(-2ω) = -sin(2ω)
+  // y(-1) = sin(-ω) = -sin(ω)
+  _osc_sin_y_n_minus_2 = -amplitude * std::sqrt(avg_signal_power) * 
+                         std::sin(2.0f * std::numbers::pi_v<float> * norm_freq);
+  _osc_sin_y_n_minus_1 = -amplitude * std::sqrt(avg_signal_power) * 
+                         std::sin(std::numbers::pi_v<float> * norm_freq);
 }
 
 void dsp_client::set_mode(Mode mode) {
   _current_mode = mode;
   
-  // Reset oscillator when changing modes
+  // Reset oscillators when changing modes
   _osc_y_n_minus_1 = 0.0f;
   _osc_y_n_minus_2 = 0.0f;
+  _osc_sin_y_n_minus_1 = 0.0f;
+  _osc_sin_y_n_minus_2 = 0.0f;
+  
+  // Reset Hilbert filter
+  if (_hilbert_filter) {
+    _hilbert_filter->reset();
+  }
+  
+  // Clear message delay buffer
+  for (size_t i = 0; i < _message_delay.capacity(); ++i) {
+    _message_delay[i] = 0.0f;
+  }
 }
 
 void dsp_client::set_transmit_carrier_freq(float freq) {
   _tx_carrier_freq = freq;
   if (_current_mode == Mode::Transmit && _processing_active) {
-    // Reinitialize oscillator with new frequency
     play_sine(_tx_carrier_freq, 1.0f);
   }
 }
@@ -223,27 +288,29 @@ void dsp_client::set_transmit_carrier_freq(float freq) {
 void dsp_client::set_receive_carrier_freq(float freq) {
   _rx_carrier_freq = freq;
   if (_current_mode == Mode::Receive && _processing_active) {
-    // Reinitialize oscillator with new frequency
     play_sine(_rx_carrier_freq, 1.0f);
   }
 }
 
 void dsp_client::set_transmit_modulation(ModulationScheme scheme) {
   _tx_modulation = scheme;
-  // Future: reset any modulation-specific state here
 }
 
 void dsp_client::set_receive_modulation(ModulationScheme scheme) {
   _rx_modulation = scheme;
-  // Future: reset any demodulation-specific state here
 }
 
 void dsp_client::start_processing() {
   _processing_active = true;
   
-  // Initialize the oscillator with the appropriate carrier frequency
+  // Initialize oscillators with appropriate carrier frequency
   float freq = (_current_mode == Mode::Transmit) ? _tx_carrier_freq : _rx_carrier_freq;
   play_sine(freq, 1.0f);
+  
+  // Reset Hilbert filter
+  if (_hilbert_filter) {
+    _hilbert_filter->reset();
+  }
 }
 
 void dsp_client::stop_processing() {
@@ -252,6 +319,8 @@ void dsp_client::stop_processing() {
   // Reset oscillator state
   _osc_y_n_minus_1 = 0.0f;
   _osc_y_n_minus_2 = 0.0f;
+  _osc_sin_y_n_minus_1 = 0.0f;
+  _osc_sin_y_n_minus_2 = 0.0f;
 }
 
 const std::vector<dsp_client::sample_t>& dsp_client::last_buffer() {
