@@ -46,6 +46,11 @@ dsp_client MainWindow::_client;
 MainWindow::MainWindow(QWidget *parent)
   : QMainWindow(parent)
   , ui(new Ui::MainWindow)
+  , _fsk_decoder_running(false)
+  , _last_block_processed(0)
+  , _symbols_received(0)
+  , _symbols_transmitted(0)
+  , _errors_detected(0)
 {
   if (_client.init() != jack::client_state::Running) {
     throw std::runtime_error("Could not initialize the JACK client");
@@ -73,6 +78,16 @@ MainWindow::MainWindow(QWidget *parent)
                      << "SSB USB Suppressed Carrier"
                      << "SSB LSB Suppressed Carrier"
                      << "4-FSK";
+
+    
+  // Set gain dial and spinbox ranges (0 to 30)
+  ui->modulation_gain_dial->setRange(0, 30);
+  ui->modulation_gain_dial->setValue(1);  // Default gain = 1
+  ui->modulation_gain_dial->setNotchesVisible(true);
+  
+  ui->modulation_gain_spinbox->setRange(0, 30);
+  ui->modulation_gain_spinbox->setValue(1);
+  ui->modulation_gain_spinbox->setSuffix("x");  // Shows "1x", "2x", etc.
   
   ui->transmit_modulation_scheme_combobox->addItems(modulation_schemes);
   ui->receive_modulation_scheme_combobox->addItems(modulation_schemes);
@@ -86,9 +101,15 @@ MainWindow::MainWindow(QWidget *parent)
   ui->receive_carrier_freq_spinbox->setValue(1000);
   ui->receive_carrier_freq_spinbox->setSuffix(" Hz");
 
+  setup_fsk_carrier_spinboxes();
+
   // Initialize radio buttons - receive is default
   ui->receivedButton->setChecked(true);
   _client.set_mode(dsp_client::Mode::Receive);
+
+  // NEW: Initially hide FSK controls (SSB is default at index 0)
+  update_tx_ui_visibility(0);
+  update_rx_ui_visibility(0);
 
   // Connect all UI signals to slots
   // File controls
@@ -129,15 +150,45 @@ MainWindow::MainWindow(QWidget *parent)
   connect(ui->receive_modulation_scheme_combobox, SIGNAL(currentIndexChanged(int)), 
           this, SLOT(on_receive_modulation_scheme_combobox_currentIndexChanged(int)));
 
+  // Connect gain controls BEFORE setting initial values
+  connect(ui->modulation_gain_dial, SIGNAL(valueChanged(int)),
+          this, SLOT(on_modulation_gain_dial_valueChanged(int)));
+  connect(ui->modulation_gain_spinbox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_modulation_gain_spinbox_valueChanged(int)));
+
+  // NEW: FSK TRANSMIT carrier frequency controls
+  connect(ui->f1_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f1_tx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f2_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f2_tx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f3_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f3_tx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f4_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f4_tx_fsk_carrier_spinBox_valueChanged(int)));
+
+  // NEW: FSK RECEIVE carrier frequency controls
+  connect(ui->f1_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f1_rx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f2_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f2_rx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f3_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f3_rx_fsk_carrier_spinBox_valueChanged(int)));
+  connect(ui->f4_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
+          this, SLOT(on_f4_rx_fsk_carrier_spinBox_valueChanged(int)));
+
+
   // Update timer - 30 fps for display
   _timer = std::make_unique<QTimer>(this);
   connect(_timer.get(), SIGNAL(timeout()), this, SLOT(on_update_timer()));
   _timer->start(33); // approximately 30 fps (1000ms/30 = 33.33ms)
+
+
 }
 
 MainWindow::~MainWindow()
 {
-    _client.stop();
+  _client.stop();
+  delete ui;
 }
 
 // Play button - start processing
@@ -190,8 +241,197 @@ void MainWindow::on_receive_carrier_freq_spinbox_valueChanged(int value) {
   _client.set_receive_carrier_freq(static_cast<float>(value));
 }
 
-// Transmit modulation scheme changed
+// ============================================================================
+// NEW: FSK CARRIER SPINBOX SETUP
+// ============================================================================
+
+void MainWindow::setup_fsk_carrier_spinboxes() {
+  // Configure TRANSMIT FSK carrier spinboxes
+  ui->f1_tx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f1_tx_fsk_carrier_spinBox->setValue(1000);
+  ui->f1_tx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f1_tx_fsk_carrier_spinBox->setPrefix("f1: ");
+  
+  ui->f2_tx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f2_tx_fsk_carrier_spinBox->setValue(2000);
+  ui->f2_tx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f2_tx_fsk_carrier_spinBox->setPrefix("f2: ");
+  
+  ui->f3_tx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f3_tx_fsk_carrier_spinBox->setValue(3000);
+  ui->f3_tx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f3_tx_fsk_carrier_spinBox->setPrefix("f3: ");
+  
+  ui->f4_tx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f4_tx_fsk_carrier_spinBox->setValue(4000);
+  ui->f4_tx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f4_tx_fsk_carrier_spinBox->setPrefix("f4: ");
+
+  // Configure RECEIVE FSK carrier spinboxes
+  ui->f1_rx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f1_rx_fsk_carrier_spinBox->setValue(1000);
+  ui->f1_rx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f1_rx_fsk_carrier_spinBox->setPrefix("f1: ");
+  
+  ui->f2_rx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f2_rx_fsk_carrier_spinBox->setValue(2000);
+  ui->f2_rx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f2_rx_fsk_carrier_spinBox->setPrefix("f2: ");
+  
+  ui->f3_rx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f3_rx_fsk_carrier_spinBox->setValue(3000);
+  ui->f3_rx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f3_rx_fsk_carrier_spinBox->setPrefix("f3: ");
+  
+  ui->f4_rx_fsk_carrier_spinBox->setRange(100, 20000);
+  ui->f4_rx_fsk_carrier_spinBox->setValue(4000);
+  ui->f4_rx_fsk_carrier_spinBox->setSuffix(" Hz");
+  ui->f4_rx_fsk_carrier_spinBox->setPrefix("f4: ");
+}
+
+// ============================================================================
+// NEW: UI VISIBILITY CONTROL
+// ============================================================================
+
+void MainWindow::update_tx_ui_visibility(int modulation_index) {
+  bool is_fsk_mode = (modulation_index == 4);  // FSK is index 4
+  bool is_ssb_mode = (modulation_index < 4);   // SSB modes are 0-3
+  
+  // Show/hide carrier frequency for SSB (not used in FSK)
+  ui->label_2->setVisible(is_ssb_mode);
+  ui->transmit_carrier_freq_spinbox->setVisible(is_ssb_mode);
+  
+  // Show/hide FSK carrier label and spinboxes
+  ui->label_6->setVisible(is_fsk_mode);  // "4-FSK Carriers" label
+  ui->f1_tx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f2_tx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f3_tx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f4_tx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+}
+
+void MainWindow::update_rx_ui_visibility(int modulation_index) {
+  bool is_fsk_mode = (modulation_index == 4);  // FSK is index 4
+  bool is_ssb_mode = (modulation_index < 4);   // SSB modes are 0-3
+  
+  // Show/hide carrier frequency for SSB (not used in FSK)
+  ui->label_3->setVisible(is_ssb_mode);
+  ui->receive_carrier_freq_spinbox->setVisible(is_ssb_mode);
+  
+  // Show/hide FSK carrier label and spinboxes
+  ui->label_7->setVisible(is_fsk_mode);  // "4-FSK Carriers" label
+  ui->f1_rx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f2_rx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f3_rx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+  ui->f4_rx_fsk_carrier_spinBox->setVisible(is_fsk_mode);
+}
+
+// ============================================================================
+// NEW: GAIN CONTROL SLOTS
+// ============================================================================
+
+void MainWindow::on_modulation_gain_dial_valueChanged(int value) {
+  // Sync spinbox with dial (without triggering another signal)
+  ui->modulation_gain_spinbox->blockSignals(true);
+  ui->modulation_gain_spinbox->setValue(value);
+  ui->modulation_gain_spinbox->blockSignals(false);
+  
+  // Update gain in DSP client
+  _current_gain = static_cast<float>(value);
+  _client.set_modulation_gain(_current_gain);
+  
+  std::cout << "Modulation gain set to: " << _current_gain << "x" << std::endl;
+}
+
+void MainWindow::on_modulation_gain_spinbox_valueChanged(int value) {
+  // Sync dial with spinbox (without triggering another signal)
+  ui->modulation_gain_dial->blockSignals(true);
+  ui->modulation_gain_dial->setValue(value);
+  ui->modulation_gain_dial->blockSignals(false);
+  
+  // Update gain in DSP client
+  _current_gain = static_cast<float>(value);
+  _client.set_modulation_gain(_current_gain);
+  
+  std::cout << "Modulation gain set to: " << _current_gain << "x" << std::endl;
+}
+
+// ============================================================================
+// NEW: FSK TRANSMIT CARRIER FREQUENCY SLOTS
+// ============================================================================
+
+void MainWindow::on_f1_tx_fsk_carrier_spinBox_valueChanged(int value) {
+  // Get current frequencies
+  auto freqs = _client.get_tx_fsk4_frequencies();
+  freqs[0] = static_cast<float>(value);
+  
+  // Update in DSP client
+  _client.set_tx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  
+  std::cout << "TX FSK f1 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f2_tx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_tx_fsk4_frequencies();
+  freqs[1] = static_cast<float>(value);
+  _client.set_tx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "TX FSK f2 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f3_tx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_tx_fsk4_frequencies();
+  freqs[2] = static_cast<float>(value);
+  _client.set_tx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "TX FSK f3 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f4_tx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_tx_fsk4_frequencies();
+  freqs[3] = static_cast<float>(value);
+  _client.set_tx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "TX FSK f4 set to: " << value << " Hz" << std::endl;
+}
+
+// ============================================================================
+// NEW: FSK RECEIVE CARRIER FREQUENCY SLOTS
+// ============================================================================
+
+void MainWindow::on_f1_rx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_rx_fsk4_frequencies();
+  freqs[0] = static_cast<float>(value);
+  _client.set_rx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "RX FSK f1 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f2_rx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_rx_fsk4_frequencies();
+  freqs[1] = static_cast<float>(value);
+  _client.set_rx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "RX FSK f2 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f3_rx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_rx_fsk4_frequencies();
+  freqs[2] = static_cast<float>(value);
+  _client.set_rx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "RX FSK f3 set to: " << value << " Hz" << std::endl;
+}
+
+void MainWindow::on_f4_rx_fsk_carrier_spinBox_valueChanged(int value) {
+  auto freqs = _client.get_rx_fsk4_frequencies();
+  freqs[3] = static_cast<float>(value);
+  _client.set_rx_fsk4_frequencies(freqs[0], freqs[1], freqs[2], freqs[3]);
+  std::cout << "RX FSK f4 set to: " << value << " Hz" << std::endl;
+}
+
+// ============================================================================
+// MODIFIED: MODULATION SCHEME CHANGE HANDLERS
+// ============================================================================
+
 void MainWindow::on_transmit_modulation_scheme_combobox_currentIndexChanged(int index) {
+  // FIRST: Update UI visibility
+  update_tx_ui_visibility(index);
+  
+  // THEN: Set modulation scheme in DSP client
   dsp_client::ModulationScheme scheme;
   switch(index) {
     case 0: scheme = dsp_client::ModulationScheme::SSB_USB; break;
@@ -204,8 +444,11 @@ void MainWindow::on_transmit_modulation_scheme_combobox_currentIndexChanged(int 
   _client.set_transmit_modulation(scheme);
 }
 
-// Receive modulation scheme changed
 void MainWindow::on_receive_modulation_scheme_combobox_currentIndexChanged(int index) {
+  // FIRST: Update UI visibility
+  update_rx_ui_visibility(index);
+  
+  // THEN: Set modulation scheme in DSP client
   dsp_client::ModulationScheme scheme;
   switch(index) {
     case 0: scheme = dsp_client::ModulationScheme::SSB_USB; break;
@@ -217,6 +460,7 @@ void MainWindow::on_receive_modulation_scheme_combobox_currentIndexChanged(int i
   }
   _client.set_receive_modulation(scheme);
 }
+
 
 // File selection
 bool MainWindow::add_file(const std::filesystem::path& file) {

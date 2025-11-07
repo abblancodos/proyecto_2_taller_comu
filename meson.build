@@ -66,7 +66,7 @@ sources = files(
     'jack_client.cpp',
     'dsp_client.cpp',
     'sndfile_thread.cpp',
-    'freq_filter.cpp',
+    'freq_filter_goertzel.cpp',
     'mainwindow.cpp'
 )
 
