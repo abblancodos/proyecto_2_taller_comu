@@ -74,3 +74,8 @@ sources = files(
 sources += uic_files
 
 executable('dspproj2', sources, dependencies: all_deps)
+
+executable('test_wav_fec',
+  ['test_wav_fec.cpp', 'conv_codec.cpp'],
+  dependencies: [sndfile_dep]
+)

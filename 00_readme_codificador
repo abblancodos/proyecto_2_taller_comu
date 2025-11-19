@@ -1,0 +1,7 @@
+Este módulo implementa un codificador convolucional estándar con K=7 y rate 1/2, usando los polinomios clásicos (171,133) en octal. Incluye también un decodificador Viterbi (hard-decision) y un contador de BER para evaluar el desempeño.
+
+El encoder toma bits de entrada (0/1) y genera 2 bits por cada uno. El decodificador recupera la secuencia original a partir de los bits recibidos, incluso cuando hay errores en el canal. Esto permite probar corrección de errores antes de integrarlo a la modulación digital del proyecto.
+
+El código está en conv_codec.h y conv_codec.cpp. Además, hay un pequeño ejecutable de prueba (test_conv.cpp) que genera bits aleatorios, los codifica, les introduce errores con una probabilidad p, los decodifica y calcula el BER resultante. Sirve para verificar que el FEC funciona antes de usarlo dentro de la cadena DSP real.
+
+Ignorar por ahora los files 01_*, por ahora, debugg purpouse.
