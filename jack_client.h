@@ -91,6 +91,8 @@ namespace jack {
     client(const client&) = delete; // not copyable
     virtual ~client();
 
+    jack_client_t* get_jack_client() const { return _client_ptr; }
+
     /**
      * Process nframes from the input in array writing the output on
      * out.

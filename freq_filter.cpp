@@ -2,9 +2,9 @@
  * freq_filter.h
  *
  * Copyright (C) 2023-2024  Pablo Alvarado
- * EL5805 Procesamiento Digital de Señales
- * Escuela de Ingeniería Electrónica
- * Tecnológico de Costa Rica
+ * EL5805 Procesamiento Digital de SeÃ±ales
+ * Escuela de IngenierÃ­a ElectrÃ³nica
+ * TecnolÃ³gico de Costa Rica
  *
  * All rights reserved.
  *
@@ -335,5 +335,4 @@ void freq_filter::fftw_complex_deleter::operator()(::fftwf_complex* ptr) {
 void freq_filter::fftw_float_deleter::operator()(float* ptr) {
   ::fftwf_free(ptr);
 }
-
 

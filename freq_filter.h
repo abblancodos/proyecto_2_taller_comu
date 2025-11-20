@@ -2,9 +2,9 @@
  * freq_filter.h
  *
  * Copyright (C) 2023-2024  Pablo Alvarado
- * EL5805 Procesamiento Digital de Señales
- * Escuela de Ingeniería Electrónica
- * Tecnológico de Costa Rica
+ * EL5805 Procesamiento Digital de SeÃ±ales
+ * Escuela de IngenierÃ­a ElectrÃ³nica
+ * TecnolÃ³gico de Costa Rica
  *
  * All rights reserved.
  *
@@ -80,7 +80,7 @@ public:
    * Change the block size.  
    * 
    * The block size is the number of "samples" processed in the frequency domain.
-   * It corresponds to the ´L', in Proakis & Manolakis' DSP book.
+   * It corresponds to the Â´L', in Proakis & Manolakis' DSP book.
    *
    * This MUST be called before set_filter.
    */

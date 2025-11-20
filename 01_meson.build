@@ -72,11 +72,10 @@ sources = files(
     'conv_codec.cpp'
 )
 
-# Add both uic_files and moc_files to sources
+# Add only uic_files to sources since moc_files are handled in dependencies
 sources += uic_files
-sources += moc_files
 
-executable('dspproj2', sources, dependencies: all_deps)
+executable('dspproj2', sources, moc_files, dependencies: all_deps)
 
 executable('test_wav_fec',
   ['test_wav_fec.cpp', 'conv_codec.cpp'],

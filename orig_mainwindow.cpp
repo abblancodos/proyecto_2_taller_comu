@@ -40,9 +40,6 @@
 #include "digital_link.h"
 
 #include <cmath>
-#include <sndfile.h>
-#include <QMessageBox>
-#include <QFileDialog>
 
 // The one and only client instance belongs to the main window
 dsp_client MainWindow::_client;
@@ -180,13 +177,6 @@ MainWindow::MainWindow(QWidget *parent)
   connect(ui->f4_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)),
           this, SLOT(on_f4_rx_fsk_carrier_spinBox_valueChanged(int)));
 
-  // Inicializar controladores digitales
-  _digital_tx_controller = std::make_unique<DigitalTxController>(_client);
-  _is_transmitting_digital = false;
-  
-  // Timer para transmisi贸n digital FSK
-  _digital_tx_timer = std::make_unique<QTimer>(this);
-  connect(_digital_tx_timer.get(), &QTimer::timeout, this, &MainWindow::on_digital_tx_timer);
 
   // Update timer - 30 fps for display
   _timer = std::make_unique<QTimer>(this);
@@ -213,22 +203,6 @@ MainWindow::~MainWindow()
 // Play button - start processing
 void MainWindow::on_start_modulation_pbutton_clicked() {
   _client.start_processing();
-  
-  // Si estamos transmitiendo FSK-4, iniciar el timer
-  if (_client.get_mode() == dsp_client::Mode::Transmit &&
-      _client.get_transmit_modulation() == dsp_client::ModulationScheme::FSK_4) {
-      
-      if (!_digital_tx_controller->done()) {
-          _is_transmitting_digital = true;
-          // Calcular intervalo: samples_per_symbol / sample_rate * 1000 ms
-          // Por ejemplo: 1024 samples / 48000 Hz = 21.33 ms
-          int interval_ms = (1024 * 1000) / 48000;
-          _digital_tx_timer->start(interval_ms);
-          
-          std::cout << "[MainWindow] Iniciando transmisi贸n FSK-4, intervalo: " 
-                    << interval_ms << " ms" << std::endl;
-      }
-  }
 
   // Si estamos en TX y la modulaci贸n seleccionada es 4-FSK, arrancar TX digital
   int tx_index = ui->transmit_modulation_scheme_combobox->currentIndex();
@@ -248,14 +222,6 @@ void MainWindow::on_stop_modulation_pbutton_clicked() {
 
   _client.stop_processing();
   _client.stop_files();
-  
-  // A脩ADIR: Detener transmisi贸n digital si est谩 activa
-  if (_is_transmitting_digital) {
-    _digital_tx_timer->stop();
-    _is_transmitting_digital = false;
-    _digital_tx_controller->reset();
-    std::cout << "[MainWindow] Transmisi贸n FSK-4 detenida" << std::endl;
-  }
 }
 
 // Passthrough button - enable passthrough mode
@@ -268,58 +234,24 @@ void MainWindow::on_passthrough_mode_pbutton_clicked() {
 
 // Transmit radio button
 void MainWindow::on_transmitButton_toggled(bool checked) {
-    if (checked) {
-        _client.set_mode(dsp_client::Mode::Transmit);
-        
-        // Conectar puertos JACK
-        if (_client.is_connected()) {
-            _client.connect_ports("dspproj2:out_1", "dspproj2:in_1");
-            _client.connect_ports("dspproj2:out_2", "dspproj2:in_2");
-        }
-
-        // Si es FSK-4, preparar transmisi髇 digital
-        if (_client.get_transmit_modulation() == dsp_client::ModulationScheme::FSK_4) {
-            if (!_wav_buffer.empty()) {
-                // Usar el WAV que ya fue cargado
-                _digital_tx_controller->prepare_wav_payload(_wav_buffer.data(), _wav_buffer.size());
-                std::cout << "[MainWindow] Modo TX activado con WAV de " 
-                          << _wav_buffer.size() << " muestras" << std::endl;
-            } else {
-                // Solo si no hay WAV cargado, generar datos de prueba
-                std::cout << "[ADVERTENCIA] No hay WAV cargado, usando datos de prueba" << std::endl;
-                _digital_tx_controller->prepare_test_payload();
-            }
-        }
-        
-        std::cout << "[MainWindow] Modo Transmit activado" << std::endl;
-    }
+  if (checked) {
+    ui->receivedButton->setChecked(false);
+    _client.set_mode(dsp_client::Mode::Transmit);
+    
+    // When transmit is active, ensure we're using the file as input
+    // The file should only be audible in passthrough mode with bypass
+  }
 }
 
 // Receive radio button
 void MainWindow::on_receivedButton_toggled(bool checked) {
-    if (checked) {
-        _client.set_mode(dsp_client::Mode::Receive);
-        
-        // Conectar puertos JACK  
-        if (_client.is_connected()) {
-            _client.connect_ports("dspproj2:out_1", "dspproj2:in_1");
-            _client.connect_ports("dspproj2:out_2", "dspproj2:in_2");
-        }
-
-        // Si es FSK-4, resetear el controlador de recepci髇
-        if (_client.get_receive_modulation() == dsp_client::ModulationScheme::FSK_4) {
-            _client.reset_rx_controller();
-            
-            // Asegurarse de que los detectores est閚 inicializados
-            _client.init_fsk4();
-            
-            std::cout << "[MainWindow] Receptor FSK-4 inicializado y listo" << std::endl;
-        }
-        
-        std::cout << "[MainWindow] Modo Receive activado" << std::endl;
-    }
+  if (checked) {
+    ui->transmitButton->setChecked(false);
+    _client.set_mode(dsp_client::Mode::Receive);
+    
+    // When receive is active, input comes from microphone
+  }
 }
-
 
 // Transmit carrier frequency changed
 void MainWindow::on_transmit_carrier_freq_spinbox_valueChanged(int value) {
@@ -551,6 +483,7 @@ void MainWindow::on_receive_modulation_scheme_combobox_currentIndexChanged(int i
   _client.set_receive_modulation(scheme);
 }
 
+
 // File selection
 bool MainWindow::add_file(const std::filesystem::path& file) {
   ui->fileEdit->setText(file.c_str());
@@ -558,39 +491,22 @@ bool MainWindow::add_file(const std::filesystem::path& file) {
 }
 
 void MainWindow::on_fileButton_clicked() {
-    QString fileName = QFileDialog::getOpenFileName(this,
-        tr("Open Audio File"),
-        "",
-        tr("Audio Files (*.wav *.flac *.ogg);;All Files (*)"));
-    
-    if (!fileName.isEmpty()) {
-        ui->fileEdit->setText(fileName);
-        _selectedFiles = QStringList() << fileName;
-        
-        // Si estamos en modo FSK-4, cargar el WAV para transmisi髇 digital
-        if (_client.get_transmit_modulation() == dsp_client::ModulationScheme::FSK_4 ||
-            _client.get_receive_modulation() == dsp_client::ModulationScheme::FSK_4) {
-            
-            if (load_wav_for_digital_tx(fileName)) {
-                // IMPORTANTE: Usar prepare_wav_payload con el WAV cargado
-                _digital_tx_controller->prepare_wav_payload(_wav_buffer.data(), _wav_buffer.size());
-                
-                QMessageBox::information(this, "FSK-4 Digital Mode", 
-                    QString("WAV cargado y preparado:\n"
-                            "%1 muestras de audio\n"
-                            "Listo para transmisi髇 digital FSK-4")
-                    .arg(_wav_buffer.size()));
-                
-                std::cout << "[MainWindow] WAV procesado para transmisi髇 digital" << std::endl;
-            }
-        } else {
-            // Modo normal: a馻dir archivo a la cola de reproducci髇
-            std::filesystem::path file(fileName.toStdString());
-            if (_client.add_file(file)) {
-                std::cout << "File added to playlist: " << fileName.toStdString() << std::endl;
-            }
-        }
+  _selectedFiles =
+      QFileDialog::getOpenFileNames(this,
+                                   "Select one or more audio files to open",
+                                   ui->fileEdit->text(),
+                                   "WAV Files (*.wav)");
+
+  if (!_selectedFiles.empty()) {
+    ui->fileEdit->setText(*_selectedFiles.begin());
+
+    _client.stop_files();
+    QStringList::iterator it;
+    for (it=_selectedFiles.begin();it!=_selectedFiles.end();++it) {
+      std::filesystem::path tmp(qPrintable(*it));
+      _client.add_file(tmp.c_str());
     }
+  }
 }
 
 void MainWindow::on_fileEdit_returnPressed() {
@@ -626,100 +542,4 @@ void MainWindow::on_update_timer() {
 
   ui->crt_plot->graph(0)->setData(_times,vals);
   ui->crt_plot->replot(QCustomPlot::rpQueuedReplot);
-  
-  // A脩ADIR al final de la funci贸n:
-  if (_client.get_mode() == dsp_client::Mode::Receive &&
-      _client.get_receive_modulation() == dsp_client::ModulationScheme::FSK_4) {
-      
-      auto rx_controller = _client.get_rx_controller();
-      if (rx_controller) {
-          QString status = QString("RX FSK-4: %1 s铆mbolos, %2 bits decodificados")
-              .arg(rx_controller->get_symbols_received())
-              .arg(rx_controller->get_bits_decoded());
-          
-          // Actualizar alg煤n label en la UI si existe
-          // ui->statusLabel->setText(status);
-          
-          std::cout << status.toStdString() << std::endl;
-      }
-  }
 }
-
-// ============================================================================
-// NEW: DIGITAL TX FUNCTIONS
-// ============================================================================
-
-void MainWindow::on_digital_tx_timer() {
-    if (_is_transmitting_digital && _digital_tx_controller) {
-        _digital_tx_controller->tick();
-        
-        if (_digital_tx_controller->done()) {
-            _digital_tx_timer->stop();
-            _is_transmitting_digital = false;
-            std::cout << "[MainWindow] Transmisi贸n FSK-4 completada" << std::endl;
-            
-            QMessageBox::information(this, "Transmisi贸n Digital", 
-                "Transmisi贸n FSK-4 completada exitosamente");
-        }
-    }
-}
-
-bool MainWindow::load_wav_for_digital_tx(const QString& filename) {
-    SF_INFO info;
-    info.format = 0;
-    SNDFILE* file = sf_open(filename.toStdString().c_str(), SFM_READ, &info);
-    
-    if (!file) {
-        QMessageBox::warning(this, "Error", "No se pudo abrir el archivo WAV");
-        return false;
-    }
-    
-    // Leer todas las muestras
-    std::vector<float> samples(info.frames * info.channels);
-    sf_count_t frames_read = sf_readf_float(file, samples.data(), info.frames);
-    sf_close(file);
-    
-    if (frames_read != info.frames) {
-        QMessageBox::warning(this, "Error", "Error al leer el archivo WAV completo");
-        return false;
-    }
-    
-    // Convertir a mono si es necesario
-    _wav_buffer.clear();
-    if (info.channels == 1) {
-        _wav_buffer = samples;
-    } else {
-        // Promediar canales para obtener mono
-        _wav_buffer.resize(info.frames);
-        for (sf_count_t i = 0; i < info.frames; ++i) {
-            float sum = 0.0f;
-            for (int ch = 0; ch < info.channels; ++ch) {
-                sum += samples[i * info.channels + ch];
-            }
-            _wav_buffer[i] = sum / info.channels;
-        }
-    }
-    
-    std::cout << "[MainWindow] WAV cargado: " 
-              << info.frames << " frames, "
-              << info.channels << " canales, "
-              << info.samplerate << " Hz"
-              << std::endl;
-    
-    return true;
-}
-
-// Added for debugg purpouses 2025.11.20
-
-void MainWindow::on_transmit_digital_button_clicked()
-{
-    // Agregar l贸gica de transmisi贸n digital
-    qDebug() << "Transmit digital button clicked";
-}
-
-void MainWindow::on_receive_digital_button_clicked()
-{
-    // Agregar l贸gica de recepci贸n digital  
-    qDebug() << "Receive digital button clicked";
-}
-

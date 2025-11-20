@@ -2,9 +2,9 @@
  * dsp_client.cpp
  *
  * Copyright (C) 2023  Pablo Alvarado
- * EL5802 Procesamiento Digital de Se¿±ales
- * Escuela de Ingenier¿­a Electr¿¿nica
- * Tecnol¿¿gico de Costa Rica
+ * EL5802 Procesamiento Digital de SeÃ±ales
+ * Escuela de IngenierÃ­a ElectrÃ³nica
+ * TecnolÃ³gico de Costa Rica
  *
  * All rights reserved.
  *
@@ -48,7 +48,6 @@
 
 #include "digital_link.h"
 
-/*
 dsp_client::dsp_client() 
   : jack::client()
   , _ffilter()
@@ -83,51 +82,6 @@ dsp_client::dsp_client()
     _fsk4_buffer[i].magnitudes_sq.fill(0.0f);
     _fsk4_buffer[i].strongest_index = 0;
   }
-}
-*/
-
-dsp_client::dsp_client() 
-  : jack::client()
-  , _ffilter()
-  , _volume(1.0f)
-  , _current_mode(Mode::Stopped)
-  , _tx_modulation(ModulationScheme::SSB_USB)
-  , _rx_modulation(ModulationScheme::SSB_USB)
-  , _tx_carrier_freq(1000.0f)
-  , _rx_carrier_freq(1000.0f)
-  , _processing_active(false)
-  , _osc_y_n_minus_1(0.0f)
-  , _osc_y_n_minus_2(1.0f)
-  , _osc_a1(0.0f)
-  , _osc_sin_y_n_minus_1(1.0f)
-  , _osc_sin_y_n_minus_2(0.0f)
-  , _osc_sin_a1(0.0f)
-  , _hilbert_filter(nullptr)
-  , _lpf_demod(nullptr)
-  , _message_delay(0)
-  , _demod_delay(0)
-  , _power(0.0f)
-  , _wav_buffer_index(0)
-  , _fsk4_block_counter(0)
-  , _fsk4_current_buffer(0)
-  , _modulation_gain(20.0f)
-  , _rx_controller(std::make_unique<DigitalRxController>())
-  , _recovered_audio_buffer(48000)  // Buffer de 1 segundo
-  , _symbol_counter(0)
-{
-    // Inicializar frecuencias FSK por defecto
-    _tx_fsk4_frequencies = {1000.0f, 2000.0f, 3000.0f, 4000.0f};
-    _rx_fsk4_frequencies = {1000.0f, 2000.0f, 3000.0f, 4000.0f};
-    _fsk4_frequencies = _tx_fsk4_frequencies;
-    
-    // Inicializar buffers FSK
-    for (int i = 0; i < 2; ++i) {
-        _fsk4_buffer[i].magnitudes.fill(0.0f);
-        _fsk4_buffer[i].magnitudes_sq.fill(0.0f);
-        _fsk4_buffer[i].strongest_index = 0;
-    }
-    
-    std::cout << "[DSP Client] Inicializado con soporte FSK-4 completo" << std::endl;
 }
 
 dsp_client::~dsp_client() {
@@ -250,7 +204,6 @@ bool dsp_client::init_subclass() {
   return true;
 }
 
-/*
 void dsp_client::init_fsk4() {
   _fsk4_detector = std::make_unique<fsk4_detector>(
     _fsk4_frequencies[0],
@@ -272,66 +225,16 @@ void dsp_client::init_fsk4() {
             << _fsk4_frequencies[2] << ", "
             << _fsk4_frequencies[3] << " Hz\n";
 }
-*/
 
-void dsp_client::init_fsk4() {
-    std::cout << "[DSP] Inicializando detectores FSK-4" << std::endl;
-    
-    // Asegurar que las frecuencias estén configuradas
-    if (_tx_fsk4_frequencies[0] == 0) {
-        // Valores por defecto si no se han configurado
-        _tx_fsk4_frequencies = {1000.0f, 2000.0f, 3000.0f, 4000.0f};
-    }
-    if (_rx_fsk4_frequencies[0] == 0) {
-        // Deben coincidir con TX para loopback
-        _rx_fsk4_frequencies = _tx_fsk4_frequencies;
-    }
-    
-    // Inicializar detector de RX
-    _rx_fsk4_detector = std::make_unique<fsk4_detector>(
-        _rx_fsk4_frequencies[0],
-        _rx_fsk4_frequencies[1], 
-        _rx_fsk4_frequencies[2],
-        _rx_fsk4_frequencies[3],
-        static_cast<float>(sample_rate()),
-        buffer_size(),
-        10  // buffer depth
-    );
-    
-    // Inicializar detector de TX (para monitoreo)
-    _tx_fsk4_detector = std::make_unique<fsk4_detector>(
-        _tx_fsk4_frequencies[0],
-        _tx_fsk4_frequencies[1],
-        _tx_fsk4_frequencies[2], 
-        _tx_fsk4_frequencies[3],
-        static_cast<float>(sample_rate()),
-        buffer_size(),
-        10
-    );
-    
-    std::cout << "[DSP] FSK-4 inicializado - Frecuencias RX: [" 
-              << _rx_fsk4_frequencies[0] << ", "
-              << _rx_fsk4_frequencies[1] << ", "
-              << _rx_fsk4_frequencies[2] << ", "
-              << _rx_fsk4_frequencies[3] << "] Hz" << std::endl;
-}
 
 bool dsp_client::process(jack_nframes_t nframes,
                          const sample_t *const in,
                          sample_t *const out) {
-  
+
   const sample_t* inptr = in;
   const sample_t* endptr = in + nframes;
   sample_t* outptr = out;
 
-  // DEBUG: Verificar conexión TX->RX
-  static int connection_check = 0;
-  if (connection_check++ % 100 == 0) {
-    std::cout << "[DSP] Modo: " << static_cast<int>(_current_mode)
-              << ", TX->RX: out[0]=" << out[0] << ", in[0]=" << in[0] 
-              << ", nframes=" << nframes << std::endl;
-  }
-  
   // Process based on current mode - everything inline
   switch(_current_mode) {
     case Mode::Passthrough:
@@ -363,7 +266,7 @@ bool dsp_client::process(jack_nframes_t nframes,
               // Step 1: Get message sample
               float message = *inptr;
               
-              // Step 2: Apply Hilbert transform to get m¿¿(t)
+              // Step 2: Apply Hilbert transform to get mÌ‚(t)
               float message_hilbert = _hilbert_filter->process(message);
               
               // Step 3: Delay original message by group delay to synchronize
@@ -371,18 +274,18 @@ bool dsp_client::process(jack_nframes_t nframes,
               float message_delayed = _message_delay.front();
               
               // Step 4: Generate carrier signals using difference equation oscillators
-              // Cosine: cos(¿¿c*t)
+              // Cosine: cos(Ï‰c*t)
               float carrier_cos = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
               _osc_y_n_minus_2 = _osc_y_n_minus_1;
               _osc_y_n_minus_1 = carrier_cos;
               
-              // Sine: sin(¿¿c*t) - uses separate oscillator with 90Â° phase shift
+              // Sine: sin(Ï‰c*t) - uses separate oscillator with 90Â° phase shift
               float carrier_sin = -_osc_sin_a1 * _osc_sin_y_n_minus_1 - _osc_sin_y_n_minus_2;
               _osc_sin_y_n_minus_2 = _osc_sin_y_n_minus_1;
               _osc_sin_y_n_minus_1 = carrier_sin;
               
               // Step 5: USB modulation
-              // USB: s(t) = m(t)*cos(¿¿c*t) - m¿¿(t)*sin(¿¿c*t)
+              // USB: s(t) = m(t)*cos(Ï‰c*t) - mÌ‚(t)*sin(Ï‰c*t)
               float modulated = message_delayed * carrier_cos - message_hilbert * carrier_sin;
               
               // Apply volume and output
@@ -402,7 +305,7 @@ bool dsp_client::process(jack_nframes_t nframes,
               // Step 1: Get message sample
               float message = *inptr;
               
-              // Step 2: Apply Hilbert transform to get m¿¿(t)
+              // Step 2: Apply Hilbert transform to get mÌ‚(t)
               float message_hilbert = _hilbert_filter->process(message);
               
               // Step 3: Delay original message by group delay to synchronize
@@ -410,18 +313,18 @@ bool dsp_client::process(jack_nframes_t nframes,
               float message_delayed = _message_delay.front();
               
               // Step 4: Generate carrier signals using difference equation oscillators
-              // Cosine: cos(¿¿c*t)
+              // Cosine: cos(Ï‰c*t)
               float carrier_cos = -_osc_a1 * _osc_y_n_minus_1 - _osc_y_n_minus_2;
               _osc_y_n_minus_2 = _osc_y_n_minus_1;
               _osc_y_n_minus_1 = carrier_cos;
               
-              // Sine: sin(¿¿c*t) - uses separate oscillator with 90Â° phase shift
+              // Sine: sin(Ï‰c*t) - uses separate oscillator with 90Â° phase shift
               float carrier_sin = -_osc_sin_a1 * _osc_sin_y_n_minus_1 - _osc_sin_y_n_minus_2;
               _osc_sin_y_n_minus_2 = _osc_sin_y_n_minus_1;
               _osc_sin_y_n_minus_1 = carrier_sin;
               
               // Step 5: LSB modulation
-              // LSB: s(t) = m(t)*cos(¿¿c*t) + m¿¿(t)*sin(¿¿c*t)
+              // LSB: s(t) = m(t)*cos(Ï‰c*t) + mÌ‚(t)*sin(Ï‰c*t)
               float modulated = message_delayed * carrier_cos + message_hilbert * carrier_sin;
               
               // Apply volume and output
@@ -447,34 +350,10 @@ bool dsp_client::process(jack_nframes_t nframes,
         // Switch on receive modulation scheme
         switch(_rx_modulation) {
           case ModulationScheme::FSK_4:
-            // Procesar detección FSK
+            // NEW: 4-FSK RECEIVE
             process_fsk4_rx(in, nframes);
-            
-            // Reproducir audio recuperado si está disponible
-            if (!_recovered_audio_buffer.empty()) {
-              size_t samples_to_copy = std::min(static_cast<size_t>(nframes), 
-                                               _recovered_audio_buffer.size());
-              
-              for (size_t i = 0; i < samples_to_copy; ++i) {
-                out[i] = _recovered_audio_buffer.front() * _volume;
-                _recovered_audio_buffer.pop_front();
-              }
-              
-              // Rellenar con ceros si no hay suficientes muestras
-              for (size_t i = samples_to_copy; i < nframes; ++i) {
-                out[i] = 0.0f;
-              }
-              
-              // Debug cada cierto tiempo
-              static int counter = 0;
-              if (++counter % 100 == 0) {
-                std::cout << "[RX] Reproduciendo audio recuperado, buffer: " 
-                          << _recovered_audio_buffer.size() << " muestras" << std::endl;
-              }
-            } else {
-              // No hay audio recuperado aún, silencio
-              std::fill(out, out + nframes, 0.0f);
-            }
+            // Output silence (or decoded audio if implementing voice FSK)
+            memset(out, 0, nframes * sizeof(sample_t));
             break;
 
           case ModulationScheme::SSB_USB:
@@ -585,7 +464,6 @@ bool dsp_client::process(jack_nframes_t nframes,
 // NEW: FSK RECEIVE - Uses RX frequencies and RX detector
 // ============================================================================
 
-/*
 void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
   if (!_rx_fsk4_detector) {
     return;
@@ -606,7 +484,7 @@ void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
   _fsk4_current_buffer.store(write_idx);
   _fsk4_block_counter.fetch_add(1);
   
-  // A¿ADIR: Enviar símbolo al controlador de recepción
+  // AÑADIR: Enviar símbolo al controlador de recepción
   if (_rx_controller) {
     _rx_controller->add_symbol(strongest);
     
@@ -615,7 +493,7 @@ void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
       std::vector<float> recovered;
       _rx_controller->get_audio(recovered);
       
-      // A¿adir al buffer circular
+      // Añadir al buffer circular
       for (float sample : recovered) {
         _recovered_audio_buffer.push_back(sample);
       }
@@ -625,69 +503,6 @@ void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
     }
   }
 }
-*/
-
-void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
-
-    // Debug
-    static int signal_check = 0;
-    float input_energy = 0.0f;
-    for (size_t i = 0; i < nframes; ++i) {
-        input_energy += in[i] * in[i];
-    }
-    input_energy /= nframes;
-    
-    if (signal_check++ % 100 == 0) {
-        std::cout << "[RX] Energía entrada: " << input_energy 
-                  << " (si es ~0, no hay señal)" << std::endl;
-    }
-
-    // Verificar que el detector esté inicializado
-    if (!_rx_fsk4_detector) {
-        std::cerr << "[ERROR] Detector FSK4 RX no inicializado, inicializando ahora..." << std::endl;
-        init_fsk4();
-        if (!_rx_fsk4_detector) {
-            return;  
-        }
-    }
-    
-    // Procesar el bloque de audio
-    _rx_fsk4_detector->process_block(in, nframes);
-    
-    // Obtener magnitudes y símbolo más fuerte
-    auto mags = _rx_fsk4_detector->get_current_magnitudes();
-    auto mags_sq = _rx_fsk4_detector->get_current_magnitudes_squared();
-    int strongest = _rx_fsk4_detector->get_strongest_frequency_index();
-    
-    // Actualizar buffer atómico para visualización
-    int write_idx = 1 - _fsk4_current_buffer.load();
-    _fsk4_buffer[write_idx].magnitudes = mags;
-    _fsk4_buffer[write_idx].magnitudes_sq = mags_sq;
-    _fsk4_buffer[write_idx].strongest_index = strongest;
-    _fsk4_current_buffer.store(write_idx);
-    _fsk4_block_counter.fetch_add(1);
-    
-    // Enviar símbolo al controlador de recepción
-    if (_rx_controller && strongest >= 0 && strongest <= 3) {
-        _rx_controller->add_symbol(static_cast<uint8_t>(strongest));
-        
-        // Verificar si hay audio recuperado
-        if (_rx_controller->has_audio_ready()) {
-            std::vector<float> recovered;
-            _rx_controller->get_audio(recovered);
-            
-            // Añadir al buffer circular para reproducción
-            for (float sample : recovered) {
-                _recovered_audio_buffer.push_back(sample * _volume);
-            }
-            
-            std::cout << "[RX FSK-4] Audio recuperado: " << recovered.size() 
-                      << " muestras, buffer total: " << _recovered_audio_buffer.size() 
-                      << std::endl;
-        }
-    }
-}
-
 
 // ============================================================================
 // NEW: FSK TRANSMIT - Uses TX frequencies
@@ -780,41 +595,26 @@ void dsp_client::set_fsk_symbol(int symbol) {
   }
 }
 
-// ============================================================================
-// NEW: RX Controller Access Methods
-// ============================================================================
-
-DigitalRxController* dsp_client::get_rx_controller() {
-  return _rx_controller.get();
-}
-
-void dsp_client::reset_rx_controller() {
-  if (_rx_controller) {
-    _rx_controller->reset();
-  }
-  _recovered_audio_buffer.clear();
-}
-
 void dsp_client::play_sine(float freq, float amplitude) {
   // Initialize BOTH cosine and sine oscillators
   const float norm_freq = freq / sample_rate();
   const float avg_signal_power = (1.0f / (2.0f * sample_rate() + 1.0f) * 1000);
   
-  // Coefficient: a1 = -2*cos(2¿¿*f/Fs)
+  // Coefficient: a1 = -2*cos(2Ï€*f/Fs)
   _osc_a1 = -2.0f * std::cos(2.0f * std::numbers::pi_v<float> * norm_freq);
   _osc_sin_a1 = _osc_a1;  // Same coefficient for both
   
-  // Initialize cosine oscillator: cos(¿¿n)
-  // y(-2) = cos(-2¿¿) = cos(2¿¿)
-  // y(-1) = cos(-¿¿) = cos(¿¿)
+  // Initialize cosine oscillator: cos(Ï‰n)
+  // y(-2) = cos(-2Ï‰) = cos(2Ï‰)
+  // y(-1) = cos(-Ï‰) = cos(Ï‰)
   _osc_y_n_minus_2 = amplitude * std::sqrt(avg_signal_power) * 
                      std::cos(2.0f * std::numbers::pi_v<float> * norm_freq);
   _osc_y_n_minus_1 = amplitude * std::sqrt(avg_signal_power) * 
                      std::cos(std::numbers::pi_v<float> * norm_freq);
   
-  // Initialize sine oscillator: sin(¿¿n) with 90Â° phase shift
-  // y(-2) = sin(-2¿¿) = -sin(2¿¿)
-  // y(-1) = sin(-¿¿) = -sin(¿¿)
+  // Initialize sine oscillator: sin(Ï‰n) with 90Â° phase shift
+  // y(-2) = sin(-2Ï‰) = -sin(2Ï‰)
+  // y(-1) = sin(-Ï‰) = -sin(Ï‰)
   _osc_sin_y_n_minus_2 = -amplitude * std::sqrt(avg_signal_power) * 
                          std::sin(2.0f * std::numbers::pi_v<float> * norm_freq);
   _osc_sin_y_n_minus_1 = -amplitude * std::sqrt(avg_signal_power) * 
@@ -914,84 +714,4 @@ void dsp_client::set_volume(float vol) {
 
 float dsp_client::volume() const {
   return std::sqrt(_volume);
-}
-
-// ============================================================================
-// WAV Buffer Management
-// ============================================================================
-
-void dsp_client::set_wav_buffer(const float* samples, size_t num_samples) {
-    _current_wav_buffer.assign(samples, samples + num_samples);
-    _wav_buffer_index = 0;
-    std::cout << "WAV buffer loaded with " << num_samples << " samples" << std::endl;
-}
-
-void dsp_client::clear_wav_buffer() {
-    _current_wav_buffer.clear();
-    _wav_buffer_index = 0;
-    std::cout << "WAV buffer cleared" << std::endl;
-}
-
-// ============================================================================
-// Recovered Audio Access
-// ============================================================================
-
-bool dsp_client::get_recovered_audio(std::vector<float>& audio) {
-    if (_recovered_audio_buffer.empty()) {
-        return false;
-    }
-    
-    // Copy available audio from circular buffer
-    audio.clear();
-    audio.reserve(_recovered_audio_buffer.size());
-    
-    for (const auto& sample : _recovered_audio_buffer) {
-        audio.push_back(sample);
-    }
-    
-    std::cout << "Retrieved " << audio.size() << " samples of recovered audio" << std::endl;
-    return true;
-}
-
-// ============================================================================
-// Legacy FSK Configuration (for backward compatibility)
-// ============================================================================
-
-void dsp_client::set_fsk4_frequencies(float f1, float f2, float f3, float f4) {
-    // Set both TX and RX to same frequencies for backward compatibility
-    set_tx_fsk4_frequencies(f1, f2, f3, f4);
-    set_rx_fsk4_frequencies(f1, f2, f3, f4);
-    
-    // Also update the legacy member variable
-    _fsk4_frequencies = {f1, f2, f3, f4};
-    
-    std::cout << "Legacy FSK frequencies updated (both TX/RX): "
-              << f1 << ", " << f2 << ", " << f3 << ", " << f4 << " Hz" << std::endl;
-}
-
-// ============================================================================
-
-bool dsp_client::connect_ports(const std::string& source, const std::string& destination) {
-  jack_client_t* jack_client = get_jack_client();
-  if (!jack_client) {
-    std::cout << "[JACK] Error: Cliente JACK no inicializado" << std::endl;
-    return false;
-  }
-  
-  int result = jack_connect(jack_client, source.c_str(), destination.c_str());
-  if (result == 0) {
-    std::cout << "[JACK] Puertos conectados: " << source << " -> " << destination << std::endl;
-    return true;
-  } else if (result == EEXIST) {
-    std::cout << "[JACK] Puertos ya conectados: " << source << " -> " << destination << std::endl;
-    return true;
-  } else {
-    std::cout << "[JACK] Error conectando puertos: " << source << " -> " << destination 
-              << " (error: " << result << ")" << std::endl;
-    return false;
-  }
-}
-
-bool dsp_client::is_connected() const {
-  return get_jack_client() != nullptr;
 }
