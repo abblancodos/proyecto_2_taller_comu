@@ -1,0 +1,5 @@
+
+    // Process RX symbols if in receive mode
+    if (_client.get_mode() == dsp_client::Mode::Receive) {
+        process_rx_symbols();
+    }
