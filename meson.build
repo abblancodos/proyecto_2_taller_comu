@@ -69,7 +69,9 @@ sources = files(
     'freq_filter_goertzel.cpp',
     'mainwindow.cpp',
     'digital_link.cpp',
-    'conv_codec.cpp'
+    'conv_codec.cpp',
+    'crc16.cpp',
+    'packet_frame.cpp'
 )
 
 # Add both uic_files and moc_files to sources
@@ -79,6 +81,11 @@ sources += moc_files
 executable('dspproj2', sources, dependencies: all_deps)
 
 executable('test_wav_fec',
-  ['test_wav_fec.cpp', 'conv_codec.cpp'],
+  ['test_wav_fec.cpp', 'conv_codec.cpp', 'crc16.cpp', 'packet_frame.cpp'],
   dependencies: [sndfile_dep]
+)
+
+executable('test_crc',
+  ['test_crc.cpp', 'crc16.cpp'],
+  dependencies: []
 )

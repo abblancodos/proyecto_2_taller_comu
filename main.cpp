@@ -44,20 +44,21 @@
 
 #include <cstdlib>
 
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
-#include <filesystem>
 #include <vector>
 
 #include <csignal>
 
 #include <boost/program_options.hpp>
 
+#include "logger.h"
 #include "mainwindow.h"
 
 #include <QtWidgets/QApplication>
 
-namespace po=boost::program_options;
+namespace po = boost::program_options;
 
 void signal_handler(int signal) {
   if (signal == SIGINT) {
@@ -68,25 +69,26 @@ void signal_handler(int signal) {
   }
 }
 
-int main (int argc, char *argv[])
-{
-  std::signal(SIGINT,signal_handler);
+int main(int argc, char *argv[]) {
+  // Inicializar logger (limpia logs/ y crea debug.log)
+  logging::Logger::instance().init("../logs");
+  LOG_INFO("=== DSP Project Started ===");
+
+  std::signal(SIGINT, signal_handler);
 
   try {
 
-  
     QApplication a(argc, argv);
 
     po::options_description desc("Allowed options");
 
-    desc.add_options()
-      ("help,h","show usage information")
-      ("files,f",
-       po::value<std::vector<std::filesystem::path> >()->multitoken(),
-       "List of audio files to be played");
+    desc.add_options()("help,h", "show usage information")(
+        "files,f",
+        po::value<std::vector<std::filesystem::path>>()->multitoken(),
+        "List of audio files to be played");
 
     po::variables_map vm;
-    po::store(po::parse_command_line(argc,argv,desc),vm);
+    po::store(po::parse_command_line(argc, argv, desc), vm);
 
     if (vm.count("help")) {
       std::cout << desc << std::endl;
@@ -94,13 +96,13 @@ int main (int argc, char *argv[])
     }
 
     MainWindow w;
-    
+
     if (vm.count("files")) {
-      const std::vector< std::filesystem::path >&
-        audio_files = vm["files"].as< std::vector<std::filesystem::path> >();
-    
-      for (const auto& f : audio_files) {
-        bool ok =w.add_file(f);
+      const std::vector<std::filesystem::path> &audio_files =
+          vm["files"].as<std::vector<std::filesystem::path>>();
+
+      for (const auto &f : audio_files) {
+        bool ok = w.add_file(f);
         std::cout << "Adding file '" << f.c_str() << "' "
                   << (ok ? "succedded" : "failed") << std::endl;
       }
@@ -108,8 +110,7 @@ int main (int argc, char *argv[])
 
     w.show();
     return a.exec();
-  }
-  catch (std::exception& exc) {
+  } catch (std::exception &exc) {
     std::cout << argv[0] << ": Error: " << exc.what() << std::endl;
     exit(EXIT_FAILURE);
   }

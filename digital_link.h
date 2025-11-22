@@ -1,84 +1,97 @@
-#pragma once
+#ifndef DIGITAL_LINK_H
+#define DIGITAL_LINK_H
 
-#include <vector>
-#include <cstdint>
 #include "conv_codec.h"
+#include "packet_frame.h"
+#include <cstdint>
+#include <sndfile.h>
+#include <string>
+#include <vector>
 
-class dsp_client;
+namespace comm {
 
-/**
- * Controlador de transmisión digital:
- * - Procesa audio WAV o datos de prueba
- * - Codifica con FEC (ConvolutionalEncoder)
- * - Mapea a símbolos 4-FSK (0..3)
- */
-class DigitalTxController {
+class DigitalLink {
 public:
-    explicit DigitalTxController(dsp_client& client);
+  DigitalLink();
 
-    // Procesar audio WAV para transmisión
-    void prepare_wav_payload(const float* audio_samples, size_t num_samples);
-    
-    // Mantener método de prueba existente
-    void prepare_test_payload();
+  // ========================
+  //        TX  (WAV -> FSK)
+  // ========================
 
-    // Llamar periódicamente para avanzar al siguiente símbolo
-    void tick();
+  /// Load WAV file (mono/stereo -> mono)
+  bool load_wav(const std::string &path);
 
-    // Verificar si terminó la transmisión
-    bool done() const;
-    
-    // Resetear el controlador
-    void reset();
+  /// Prepare payload: PCM -> bits -> FEC -> Frame (Preamble+Header+Payload+CRC)
+  /// -> Symbols
+  bool prepare_tx_payload();
+
+  /// Is payload ready?
+  bool tx_ready() const { return _tx_ready; }
+
+  /// Is transmission done?
+  bool tx_done() const;
+
+  /// Get next symbol (0..3)
+  int next_tx_symbol();
+
+  /// Reset TX state
+  void reset_tx();
+
+  /// Get total symbols to transmit
+  size_t get_tx_symbol_count() const { return _tx_symbols.size(); }
+
+  // ========================
+  //        RX  (FSK -> WAV)
+  // ========================
+
+  /// Reset RX state
+  void reset_rx();
+
+  /// Process received symbol (0..3)
+  /// Returns true if a complete frame was detected and processed
+  void process_rx_symbol(uint8_t symbol);
+
+  /// Check if a frame has been successfully received and decoded
+  bool frame_complete() const { return _frame_complete; }
+
+  /// Save received audio to WAV
+  bool save_received_wav(const std::string &path);
+
+  /// Getters for received metadata
+  int get_sample_rate() const { return _rx_sample_rate; }
+  int get_channels() const { return _rx_channels; }
 
 private:
-    dsp_client& _client;
-    conv::ConvolutionalEncoder _enc;
+  // Helpers
+  void pcm_to_bits();
+  void bits_to_pcm(const std::vector<uint8_t> &info_bits);
 
-    std::vector<std::uint8_t> _tx_bits;      // bits originales
-    std::vector<std::uint8_t> _tx_bits_enc;  // bits codificados
-    std::vector<std::uint8_t> _symbols;      // símbolos 0..3
-    std::size_t _symbol_index = 0;
+  // State
+  int _sample_rate;
+  int _channels;
+  int _bits_per_sample;
+
+  std::vector<int16_t> _pcm_samples;
+  std::vector<int16_t> _pcm_rx;
+
+  // TX
+  std::vector<uint8_t> _tx_bits;
+  std::vector<uint8_t> _tx_bits_enc;
+  std::vector<uint8_t> _tx_symbols;
+  size_t _tx_symbol_index;
+  bool _tx_ready;
+
+  // RX
+  std::vector<uint8_t> _rx_symbol_buffer; // Buffer for incoming symbols
+  bool _frame_complete;
+  int _rx_sample_rate;
+  int _rx_channels;
+
+  // FEC
+  conv::ConvolutionalEncoder _enc;
+  conv::ViterbiDecoder _dec;
 };
 
-/**
- * Controlador de recepción digital:
- * - Recibe símbolos FSK detectados
- * - Decodifica con Viterbi
- * - Reconstruye audio
- */
-class DigitalRxController {
-public:
-    DigitalRxController();
-    
-    // Añadir un símbolo detectado
-    void add_symbol(std::uint8_t symbol);
-    
-    // Procesar bloques acumulados
-    void process_block();
-    
-    // Verificar si hay audio recuperado
-    bool has_audio_ready() const;
-    
-    // Obtener audio recuperado
-    void get_audio(std::vector<float>& audio);
-    
-    // Resetear el controlador
-    void reset();
-    
-    // Obtener estadísticas
-    std::size_t get_symbols_received() const { return _total_symbols; }
-    std::size_t get_bits_decoded() const { return _total_bits_decoded; }
+} // namespace comm
 
-private:
-    conv::ViterbiDecoder _dec;
-    std::vector<std::uint8_t> _rx_bits;
-    std::vector<std::uint8_t> _rx_symbols;
-    std::vector<std::uint8_t> _decoded_bits;
-    std::vector<float> _recovered_audio;
-    
-    std::size_t _total_symbols;
-    std::size_t _total_bits_decoded;
-    
-    static constexpr std::size_t SYMBOLS_PER_BLOCK = 512;
-};
+#endif // DIGITAL_LINK_H
