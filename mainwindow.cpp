@@ -39,6 +39,7 @@
 #include "ui_mainwindow.h"
 
 #include <cmath>
+#include <iostream>
 
 // The one and only client instance belongs to the main window
 dsp_client MainWindow::_client;
@@ -131,6 +132,10 @@ MainWindow::MainWindow(QWidget *parent)
           this, SLOT(on_stop_modulation_pbutton_clicked()));
   connect(ui->passthrough_mode_pbutton, SIGNAL(clicked()), 
           this, SLOT(on_passthrough_mode_pbutton_clicked()));
+  connect(ui->process_file_pButton, SIGNAL(clicked()),
+          this, SLOT(on_process_file_pButton_clicked()));
+  connect(ui->process_mic_pButton, SIGNAL(clicked()),
+          this, SLOT(on_process_mic_pButton_clicked()));
   
   // Radio buttons for transmit/receive
   connect(ui->transmitButton, SIGNAL(toggled(bool)), 
@@ -193,6 +198,19 @@ MainWindow::~MainWindow()
 
 // Play button - start processing
 void MainWindow::on_start_modulation_pbutton_clicked() {
+  // Determine the mode based on current radio button selection
+  if (ui->transmitButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Transmit);
+    std::cout << "Starting modulation in TRANSMIT mode" << std::endl;
+  } else if (ui->receivedButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Receive);
+    std::cout << "Starting demodulation in RECEIVE mode" << std::endl;
+  } else {
+    // If neither is checked, assume passthrough
+    _client.set_mode(dsp_client::Mode::Passthrough);
+    std::cout << "Starting in PASSTHROUGH mode" << std::endl;
+  }
+  
   _client.start_processing();
 }
 
@@ -200,13 +218,80 @@ void MainWindow::on_start_modulation_pbutton_clicked() {
 void MainWindow::on_stop_modulation_pbutton_clicked() {
   _client.stop_processing();
   _client.stop_files();
+  std::cout << "Processing stopped" << std::endl;
 }
+
 
 // Passthrough button - enable passthrough mode
 void MainWindow::on_passthrough_mode_pbutton_clicked() {
+  // Stop any current processing
+  _client.stop_processing();
+  
+  // Uncheck both radio buttons to indicate passthrough mode
   ui->transmitButton->setChecked(false);
   ui->receivedButton->setChecked(false);
+  
+  // Set passthrough mode and start processing
   _client.set_mode(dsp_client::Mode::Passthrough);
+  _client.start_processing();
+  
+  std::cout << "Passthrough mode activated - input passes directly to output" << std::endl;
+}
+
+// Play from file button - start playing from selected audio file
+void MainWindow::on_process_file_pButton_clicked() {
+  // First, make sure we have a file selected
+  if (ui->fileEdit->text().isEmpty()) {
+    std::cerr << "No file selected! Please select an audio file first." << std::endl;
+    return;
+  }
+  
+  // Stop any current processing
+  _client.stop_processing();
+  
+  // Set the mode based on current radio button selection
+  if (ui->transmitButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Transmit);
+    std::cout << "Playing from file with TRANSMIT modulation" << std::endl;
+  } else if (ui->receivedButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Receive);
+    std::cout << "Playing from file with RECEIVE demodulation" << std::endl;
+  } else {
+    // Default to transmit if nothing is selected
+    ui->transmitButton->setChecked(true);
+    _client.set_mode(dsp_client::Mode::Transmit);
+    std::cout << "Playing from file with TRANSMIT modulation (default)" << std::endl;
+  }
+  
+  // Start processing from file
+  _client.start_processing();
+  
+  std::cout << "  File: " << ui->fileEdit->text().toStdString() << std::endl;
+}
+
+// Play from microphone button - start processing microphone input
+void MainWindow::on_process_mic_pButton_clicked() {
+  // Stop file playback if active
+  _client.stop_files();
+  
+  // Stop any current processing
+  _client.stop_processing();
+  
+  // Set the mode based on current radio button selection
+  if (ui->transmitButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Transmit);
+    std::cout << "Processing microphone input with TRANSMIT modulation" << std::endl;
+  } else if (ui->receivedButton->isChecked()) {
+    _client.set_mode(dsp_client::Mode::Receive);
+    std::cout << "Processing microphone input with RECEIVE demodulation" << std::endl;
+  } else {
+    // Default to transmit if nothing is selected
+    ui->transmitButton->setChecked(true);
+    _client.set_mode(dsp_client::Mode::Transmit);
+    std::cout << "Processing microphone input with TRANSMIT modulation (default)" << std::endl;
+  }
+  
+  // Start processing from microphone
   _client.start_processing();
 }
 

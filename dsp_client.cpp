@@ -36,15 +36,7 @@
  */
 
 #include "dsp_client.h"
-#include "jack_client.h"
-#include "hilbert_filter_coeffs.h"  // Hilbert filter coefficients
-#include "lpf_demod_coeffs.h"       // Low-pass filter coefficients
-#include "fir_filter.h"              // Unified FIR filter class
-#include <boost/circular_buffer.hpp>
-#include <numbers>
-#include <cstring>
-#include <cmath>
-#include <iostream>
+
 dsp_client::dsp_client() 
   : jack::client()
   , _ffilter()
@@ -145,66 +137,34 @@ bool dsp_client::init_subclass() {
   for (size_t i = 0; i < lpf_demod::GROUP_DELAY; ++i) {
       _demod_delay.push_back(0.0f);
   }
+  
+  const float BAUDRATE = 100.0f;  // symbols/second
+  const size_t BUFFER_SIZE = 65536;  // Large circular buffer
 
-  // NEW: Initialize 4-FSK detector
-  init_fsk4();
-
-  // NEW: Initialize separate TX and RX FSK detectors
-  _tx_fsk4_detector = std::make_unique<fsk4_detector>(
+  _fsk4_tx = std::make_unique<fsk4::FSK4TransmitterBuffer>(
     _tx_fsk4_frequencies[0],
     _tx_fsk4_frequencies[1],
     _tx_fsk4_frequencies[2],
     _tx_fsk4_frequencies[3],
+    BAUDRATE,
     sample_rate(),
-    buffer_size(),
-    10
+    BUFFER_SIZE
   );
-  
-  _rx_fsk4_detector = std::make_unique<fsk4_detector>(
+
+  _fsk4_rx = std::make_unique<fsk4::FSK4ReceiverBuffer>(
     _rx_fsk4_frequencies[0],
     _rx_fsk4_frequencies[1],
     _rx_fsk4_frequencies[2],
     _rx_fsk4_frequencies[3],
+    BAUDRATE,
     sample_rate(),
     buffer_size(),
-    10
+    BUFFER_SIZE
   );
-  
-  std::cout << "TX FSK frequencies: "
-            << _tx_fsk4_frequencies[0] << ", "
-            << _tx_fsk4_frequencies[1] << ", "
-            << _tx_fsk4_frequencies[2] << ", "
-            << _tx_fsk4_frequencies[3] << " Hz\n";
-            
-  std::cout << "RX FSK frequencies: "
-            << _rx_fsk4_frequencies[0] << ", "
-            << _rx_fsk4_frequencies[1] << ", "
-            << _rx_fsk4_frequencies[2] << ", "
-            << _rx_fsk4_frequencies[3] << " Hz\n";
+        
+
   
   return true;
-}
-
-void dsp_client::init_fsk4() {
-  _fsk4_detector = std::make_unique<fsk4_detector>(
-    _fsk4_frequencies[0],
-    _fsk4_frequencies[1],
-    _fsk4_frequencies[2],
-    _fsk4_frequencies[3],
-    sample_rate(),
-    buffer_size(),
-    10  // Keep last 10 magnitude measurements
-  );
-  
-  // Configure FSK transmitter
-  _fsk_tx.samples_per_symbol = buffer_size();  // 1 symbol per block
-  _fsk_tx.reset();
-  
-  std::cout << "4-FSK initialized: "
-            << _fsk4_frequencies[0] << ", "
-            << _fsk4_frequencies[1] << ", "
-            << _fsk4_frequencies[2] << ", "
-            << _fsk4_frequencies[3] << " Hz\n";
 }
 
 
@@ -234,9 +194,13 @@ bool dsp_client::process(jack_nframes_t nframes,
 
           case ModulationScheme::FSK_4:
             // NEW: 4-FSK TRANSMIT
-            process_fsk4_tx(out, nframes);
-            break;
-          
+            _fsk4_tx->get_samples(out, nframes);
+            inptr = out;
+            endptr = out + nframes;
+            while(inptr != endptr){
+              *out *= _volume * _modulation_gain;
+              ++out;
+            }
 
           case ModulationScheme::SSB_USB:
           case ModulationScheme::SSB_USB_SC:
@@ -331,10 +295,7 @@ bool dsp_client::process(jack_nframes_t nframes,
         // Switch on receive modulation scheme
         switch(_rx_modulation) {
           case ModulationScheme::FSK_4:
-            // NEW: 4-FSK RECEIVE
-            process_fsk4_rx(in, nframes);
-            // Output silence (or decoded audio if implementing voice FSK)
-            memset(out, 0, nframes * sizeof(sample_t));
+            _fsk4_rx->put_samples(in, nframes);
             break;
 
           case ModulationScheme::SSB_USB:

@@ -158,6 +158,9 @@ private:
     
     // NEW: Current modulation gain (avoid magic numbers)
     float _current_gain;
+
+    void on_process_file_pButton_clicked();
+    void on_process_mic_pButton_clicked();
 };
 
 #endif // MAINWINDOW_H

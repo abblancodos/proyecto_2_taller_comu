@@ -41,6 +41,16 @@
 #include "freq_filter_goertzel.h"
 #include "prealloc_ringbuffer.h"
 #include "fir_filter.h"  // Unified FIR filter class (handles both Hilbert and standard FIR)
+#include "fsk4_system.h"
+#include "jack_client.h"
+#include "hilbert_filter_coeffs.h"  // Hilbert filter coefficients
+#include "lpf_demod_coeffs.h"       // Low-pass filter coefficients
+#include "fir_filter.h"              // Unified FIR filter class
+#include <boost/circular_buffer.hpp>
+#include <numbers>
+#include <cstring>
+#include <cmath>
+#include <iostream>
 #include <boost/circular_buffer.hpp>
 #include <memory>
 #include <atomic>
@@ -146,6 +156,11 @@ private:
   // Hilbert filter and delay buffers for SSB
   FIRFilter* _hilbert_filter;
   FIRFilter* _lpf_demod;
+
+  // FSK-4 Transmitter and Receiver with circular buffers
+  std::unique_ptr<fsk4::FSK4TransmitterBuffer> _fsk4_tx;
+  std::unique_ptr<fsk4::FSK4ReceiverBuffer> _fsk4_rx;
+
   boost::circular_buffer<float> _message_delay;
   boost::circular_buffer<float> _demod_delay;
 
