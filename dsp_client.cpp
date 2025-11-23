@@ -46,7 +46,7 @@
 #include <iostream>
 #include <numbers>
 
-#include "digital_link.h"
+// #include "digital_link.h"
 
 /*
 dsp_client::dsp_client()
@@ -673,6 +673,14 @@ std::vector<uint8_t> dsp_client::get_rx_symbols() {
 // ============================================================================
 
 void dsp_client::process_fsk4_tx(sample_t *out, std::size_t nframes) {
+
+  // Debug
+  static int dbg_count = 0;
+  if (dbg_count < 50) {
+    std::cout << "[TX DBG dsp_client] sym[" << dbg_count
+              << "]=" << _fsk_tx.current_symbol << "\n";
+    dbg_count++;
+  }
   // Generate FSK samples using TX frequencies
   for (std::size_t i = 0; i < nframes; ++i) {
     // Use TX frequency for current symbol

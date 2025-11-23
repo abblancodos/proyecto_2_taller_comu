@@ -51,7 +51,6 @@ dsp_client MainWindow::_client;
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow), _selectedFiles(),
       _timer(std::make_unique<QTimer>(this)), _times(),
-      _tx_fsk_timer(std::make_unique<QTimer>(this)), _fsk_decoder_thread(),
       _fsk_decoder_running(false),
       _digital_tx_timer(std::make_unique<QTimer>(this)), _wav_buffer(),
       _is_transmitting_digital(false), _tx_symbol_counter(0),
@@ -119,74 +118,6 @@ MainWindow::MainWindow(QWidget *parent)
   update_tx_ui_visibility(0);
   update_rx_ui_visibility(0);
 
-  // Connect all UI signals to slots
-  // File controls
-  connect(ui->fileButton, SIGNAL(clicked()), this,
-          SLOT(on_fileButton_clicked()));
-  connect(ui->fileEdit, SIGNAL(returnPressed()), this,
-          SLOT(on_fileEdit_returnPressed()));
-
-  // Volume controls
-  connect(ui->volumeDial, SIGNAL(sliderMoved(int)), this,
-          SLOT(on_volumeDial_sliderMoved(int)));
-  connect(ui->volumeSpin, SIGNAL(valueChanged(int)), this,
-          SLOT(on_volumeSpin_valueChanged(int)));
-
-  // Playback control buttons
-  connect(ui->start_modulation_pbutton, SIGNAL(clicked()), this,
-          SLOT(on_start_modulation_pbutton_clicked()));
-  connect(ui->stop_modulation_pbutton, SIGNAL(clicked()), this,
-          SLOT(on_stop_modulation_pbutton_clicked()));
-  connect(ui->passthrough_mode_pbutton, SIGNAL(clicked()), this,
-          SLOT(on_passthrough_mode_pbutton_clicked()));
-
-  // Radio buttons for transmit/receive
-  connect(ui->transmitButton, SIGNAL(toggled(bool)), this,
-          SLOT(on_transmitButton_toggled(bool)));
-  connect(ui->receivedButton, SIGNAL(toggled(bool)), this,
-          SLOT(on_receivedButton_toggled(bool)));
-
-  // Transmit controls
-  connect(ui->transmit_carrier_freq_spinbox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_transmit_carrier_freq_spinbox_valueChanged(int)));
-  connect(
-      ui->transmit_modulation_scheme_combobox, SIGNAL(currentIndexChanged(int)),
-      this,
-      SLOT(on_transmit_modulation_scheme_combobox_currentIndexChanged(int)));
-
-  // Receive controls
-  connect(ui->receive_carrier_freq_spinbox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_receive_carrier_freq_spinbox_valueChanged(int)));
-  connect(ui->receive_modulation_scheme_combobox,
-          SIGNAL(currentIndexChanged(int)), this,
-          SLOT(on_receive_modulation_scheme_combobox_currentIndexChanged(int)));
-
-  // Connect gain controls BEFORE setting initial values
-  connect(ui->modulation_gain_dial, SIGNAL(valueChanged(int)), this,
-          SLOT(on_modulation_gain_dial_valueChanged(int)));
-  connect(ui->modulation_gain_spinbox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_modulation_gain_spinbox_valueChanged(int)));
-
-  // NEW: FSK TRANSMIT carrier frequency controls
-  connect(ui->f1_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f1_tx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f2_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f2_tx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f3_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f3_tx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f4_tx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f4_tx_fsk_carrier_spinBox_valueChanged(int)));
-
-  // NEW: FSK RECEIVE carrier frequency controls
-  connect(ui->f1_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f1_rx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f2_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f2_rx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f3_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f3_rx_fsk_carrier_spinBox_valueChanged(int)));
-  connect(ui->f4_rx_fsk_carrier_spinBox, SIGNAL(valueChanged(int)), this,
-          SLOT(on_f4_rx_fsk_carrier_spinBox_valueChanged(int)));
-
   // Inicializar controladores digitales
   _is_transmitting_digital = false;
 
@@ -234,12 +165,6 @@ void MainWindow::on_start_modulation_pbutton_clicked() {
 
 // Si estamos en TX y la modulación seleccionada es 4-FSK, arrancar TX digital
 void MainWindow::on_stop_modulation_pbutton_clicked() {
-  /*
-  if (_tx_fsk_timer) {
-    _tx_fsk_timer->stop();
-  }
-  */
-  // _tx_controller.reset();
 
   _client.stop_processing();
   _client.stop_files();
@@ -602,6 +527,7 @@ bool MainWindow::add_file(const std::filesystem::path &file) {
 }
 
 void MainWindow::on_fileButton_clicked() {
+  std::cout << "ENTER on_fileButton_clicked\n";
   QString fileName = QFileDialog::getOpenFileName(
       this, tr("Open Audio File"), "",
       tr("Audio Files (*.wav *.flac *.ogg);;All Files (*)"));
@@ -766,35 +692,6 @@ bool MainWindow::load_wav_to_digital_link(const QString &filename) {
   return true;
 }
 
-void MainWindow::start_digital_transmission() {
-  /*
-  if (!_digital_link.tx_ready()) {
-    std::cerr << "[MainWindow] No payload ready for transmission\n";
-    return;
-
-  }
-*/
-  _digital_link.reset_tx();
-
-  if (!_tx_fsk_timer) {
-    _tx_fsk_timer = std::make_unique<QTimer>(this);
-    connect(_tx_fsk_timer.get(), &QTimer::timeout, this,
-            &MainWindow::on_digital_symbol_timer);
-  }
-
-  _tx_fsk_timer->start(20);
-  std::cout << "[MainWindow] Started digital transmission\n";
-}
-
-void MainWindow::stop_digital_transmission() {
-  /*
-  if (_tx_fsk_timer) {
-    _tx_fsk_timer->stop();
-  }
-  std::cout << "[MainWindow] Stopped digital transmission\n";
-  */
-}
-
 /* Old on_digital_symbol_timer version
 
 void MainWindow::on_digital_symbol_timer() {
@@ -845,32 +742,50 @@ void MainWindow::on_digital_symbol_timer() {
 
 */
 
-// Removed RX section
 void MainWindow::on_digital_symbol_timer() {
   static int tx_counter = 0;
 
-  if (_digital_link.tx_ready()) {
-    int symbol = _digital_link.next_tx_symbol();
-
-    if (symbol >= 0) {
-      _client.set_fsk_symbol(symbol);
-
-      if (tx_counter % 10 == 0) {
-        std::cout << "[TX] Symbol " << tx_counter << ": " << symbol
-                  << std::endl;
-      }
-      tx_counter++;
-    } else {
-      // Transmission complete
-      std::cout << "[TX] Transmission completed" << std::endl;
-      if (_digital_tx_timer) {
-        _digital_tx_timer->stop();
-      }
-      tx_counter = 0;
-      _tx_symbol_counter = 0;
-      _is_transmitting_digital = false;
-    }
+  // 1) Solo correr si estamos transmitiendo
+  if (_client.get_mode() != dsp_client::Mode::Transmit) {
+    return;
   }
+
+  // 2) Si no hay payload listo, detener
+  if (!_digital_link.tx_ready()) {
+    std::cout << "[TX] tx_ready=false, stopping digital timer\n";
+    _digital_tx_timer->stop();
+    _is_transmitting_digital = false;
+    tx_counter = 0;
+    return;
+  }
+
+  // 3) Obtener siguiente símbolo
+  int symbol = _digital_link.next_tx_symbol();
+
+  // === FIX 5: si no hay más símbolos, terminar ===
+  if (symbol < 0) {
+    std::cout << "[TX] Transmission completed\n";
+    _digital_tx_timer->stop();
+    _is_transmitting_digital = false;
+    tx_counter = 0;
+    return;
+  }
+
+  // === FIX 4: NO mandar símbolo 0 “default” ===
+  if (symbol > 3) {
+    std::cout << "[ERROR] next_tx_symbol() devolvió símbolo inválido: "
+              << symbol << "\n";
+    return;
+  }
+
+  // 4) Mandar símbolo real
+  _client.set_fsk_symbol(symbol);
+
+  if (tx_counter % 10 == 0) {
+    std::cout << "[TX] Symbol " << tx_counter << ": " << symbol << "\n";
+  }
+
+  tx_counter++;
 }
 
 // Improved RX Integration with Auto-Playback

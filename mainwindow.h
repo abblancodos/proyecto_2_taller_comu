@@ -113,7 +113,6 @@ private:
   QVector<double> _times;
 
   // Timer and controller for digital transmision FSK+FEC
-  std::unique_ptr<QTimer> _tx_fsk_timer;
   // std::unique_ptr<DigitalTxController> _tx_controller;
 
   // NEW: FSK Decoder Thread
