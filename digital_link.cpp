@@ -51,6 +51,10 @@ bool DigitalLink::load_wav(const std::string &path) {
   return true;
 }
 
+/*
+*
+* Functional version
+*
 void DigitalLink::pcm_to_bits() {
   _tx_bits.clear();
   _tx_bits.reserve(_pcm_samples.size() * 16);
@@ -62,6 +66,42 @@ void DigitalLink::pcm_to_bits() {
       _tx_bits.push_back((val >> i) & 1);
     }
   }
+}
+*/
+
+// Debug version
+void DigitalLink::pcm_to_bits() {
+  _tx_bits.clear();
+  _tx_bits.reserve(_pcm_samples.size() * 16);
+
+  const int DEBUG_SAMPLES = 5;
+  int sample_index = 0;
+
+  for (int16_t sample : _pcm_samples) {
+    uint16_t val = static_cast<uint16_t>(sample);
+
+    if (sample_index < DEBUG_SAMPLES) {
+      std::cout << "\n[PCM->BITS] Sample " << sample_index
+                << " (value = " << sample << ") -> bits: ";
+    }
+
+    for (int i = 0; i < 16; ++i) {
+      uint8_t bit = (val >> i) & 1;
+      _tx_bits.push_back(bit);
+
+      if (sample_index < DEBUG_SAMPLES) {
+        std::cout << (int)bit;
+      }
+    }
+
+    if (sample_index < DEBUG_SAMPLES) {
+      std::cout << "  (LSB→MSB)" << std::endl;
+    }
+
+    sample_index++;
+  }
+
+  std::cout << "[PCM->BITS] Total bits: " << _tx_bits.size() << std::endl;
 }
 
 bool DigitalLink::prepare_tx_payload() {
@@ -99,7 +139,7 @@ bool DigitalLink::tx_done() const {
 
 int DigitalLink::next_tx_symbol() {
   if (tx_done())
-    return 0;
+    return -1;
   return _tx_symbols[_tx_symbol_index++];
 }
 

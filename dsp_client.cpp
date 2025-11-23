@@ -407,11 +407,12 @@ bool dsp_client::process(jack_nframes_t nframes, const sample_t *const in,
   case Mode::Receive:
     // NEW: For FSK-4, do TX+RX simultaneously for loopback testing
     if (_rx_modulation == ModulationScheme::FSK_4 && _processing_active) {
-      // First, generate TX signal
+      // First, generate TX signal (Loopback)
       process_fsk4_tx(out, nframes);
 
-      // Then, process RX from input (which will be looped back from output)
-      process_fsk4_rx(in, nframes);
+      // INTERNAL LOOPBACK: Use 'out' (TX signal) directly as input for RX
+      // This bypasses JACK input latency and connection issues
+      process_fsk4_rx(out, nframes);
     } else if (_processing_active) {
       // Original RX-only code for SSB modes
       switch (_rx_modulation) {

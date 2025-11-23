@@ -208,10 +208,13 @@ MainWindow::~MainWindow() {
 void MainWindow::on_start_modulation_pbutton_clicked() {
   _client.start_processing();
 
-  // Si estamos transmitiendo FSK-4, iniciar el timer
-  if (_client.get_mode() == dsp_client::Mode::Transmit &&
-      _client.get_transmit_modulation() ==
-          dsp_client::ModulationScheme::FSK_4) {
+  // Si estamos transmitiendo FSK-4 (o recibiendo en loopback), iniciar el timer
+  if ((_client.get_mode() == dsp_client::Mode::Transmit &&
+       _client.get_transmit_modulation() ==
+           dsp_client::ModulationScheme::FSK_4) ||
+      (_client.get_mode() == dsp_client::Mode::Receive &&
+       _client.get_receive_modulation() ==
+           dsp_client::ModulationScheme::FSK_4)) {
 
     // Digital transmission removed
     _is_transmitting_digital = true;
@@ -222,6 +225,10 @@ void MainWindow::on_start_modulation_pbutton_clicked() {
 
     std::cout << "[MainWindow] Iniciando transmisión FSK-4, intervalo: "
               << interval_ms << " ms" << std::endl;
+    std::cout << "  TX Ready: " << (_digital_link.tx_ready() ? "YES" : "NO")
+              << "\n";
+    std::cout << "  Total Symbols: " << _digital_link.get_tx_symbol_count()
+              << "\n";
   }
 }
 
@@ -603,6 +610,13 @@ void MainWindow::on_fileButton_clicked() {
     ui->fileEdit->setText(fileName);
     _selectedFiles = QStringList() << fileName;
 
+    // Debug prints for modulation state
+    std::cout << "[MainWindow] Checking modulation for file load:\n";
+    std::cout << "  TX Mod: " << (int)_client.get_transmit_modulation()
+              << " (FSK4=" << (int)dsp_client::ModulationScheme::FSK_4 << ")\n";
+    std::cout << "  RX Mod: " << (int)_client.get_receive_modulation()
+              << " (FSK4=" << (int)dsp_client::ModulationScheme::FSK_4 << ")\n";
+
     // Si estamos en modo FSK-4, cargar el WAV para transmisión digital
     if (_client.get_transmit_modulation() ==
             dsp_client::ModulationScheme::FSK_4 ||
@@ -841,8 +855,9 @@ void MainWindow::on_digital_symbol_timer() {
     if (symbol >= 0) {
       _client.set_fsk_symbol(symbol);
 
-      if (tx_counter % 100 == 0) {
-        std::cout << "[TX] Transmitting symbol " << tx_counter << std::endl;
+      if (tx_counter % 10 == 0) {
+        std::cout << "[TX] Symbol " << tx_counter << ": " << symbol
+                  << std::endl;
       }
       tx_counter++;
     } else {
