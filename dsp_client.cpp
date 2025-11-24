@@ -673,14 +673,29 @@ std::vector<uint8_t> dsp_client::get_rx_symbols() {
 // ============================================================================
 
 void dsp_client::process_fsk4_tx(sample_t *out, std::size_t nframes) {
+  // Extended debug logging around symbol 60
+  static int block_count = 0;
+  static int last_symbol = -1;
 
-  // Debug
-  static int dbg_count = 0;
-  if (dbg_count < 50) {
-    std::cout << "[TX DBG dsp_client] sym[" << dbg_count
-              << "]=" << _fsk_tx.current_symbol << "\n";
-    dbg_count++;
+  bool in_debug_range = (block_count >= 55 && block_count <= 70);
+
+  if (in_debug_range) {
+    std::cout << "[TX JACK BLOCK " << block_count << "] "
+              << "sym=" << _fsk_tx.current_symbol
+              << " samples_in_sym=" << _fsk_tx.samples_in_symbol
+              << " samples_per_sym=" << _fsk_tx.samples_per_symbol
+              << " nframes=" << nframes
+              << " autonomous=" << (_autonomous_tx ? "ON" : "OFF") << "\n";
   }
+
+  // Validate symbol is in range
+  if (_fsk_tx.current_symbol < 0 || _fsk_tx.current_symbol > 3) {
+    std::cerr << "[ERROR JACK] Invalid symbol: " << _fsk_tx.current_symbol
+              << " at block " << block_count << "\n";
+    // Emergency fallback to symbol 0
+    _fsk_tx.current_symbol = 0;
+  }
+
   // Generate FSK samples using TX frequencies
   for (std::size_t i = 0; i < nframes; ++i) {
     // Use TX frequency for current symbol
@@ -700,9 +715,58 @@ void dsp_client::process_fsk4_tx(sample_t *out, std::size_t nframes) {
     out[i] = sample * _modulation_gain * _volume;
   }
 
-  if (_fsk_tx.samples_in_symbol >= _fsk_tx.samples_per_symbol) {
+  // AUTONOMOUS MODE: Check if we completed a symbol period and fetch next
+  // symbol
+  if (_autonomous_tx && _digital_link &&
+      _fsk_tx.samples_in_symbol >= _fsk_tx.samples_per_symbol) {
+
+    if (in_debug_range) {
+      std::cout << "  [AUTONOMOUS] Symbol period complete, fetching next...\n";
+    }
+
+    // Fetch next symbol from digital_link
+    int next_symbol = _digital_link->next_tx_symbol();
+
+    if (next_symbol < 0) {
+      // Transmission complete
+      if (in_debug_range) {
+        std::cout << "  [AUTONOMOUS] TX COMPLETE - no more symbols\n";
+      }
+      _autonomous_tx = false;     // Stop autonomous mode
+      _fsk_tx.current_symbol = 0; // Fallback
+      _fsk_tx.samples_in_symbol = 0;
+    } else if (next_symbol >= 0 && next_symbol <= 3) {
+      // Valid symbol
+      if (in_debug_range || next_symbol != _fsk_tx.current_symbol) {
+        std::cout << "  [AUTONOMOUS] Symbol " << _fsk_tx.current_symbol
+                  << " -> " << next_symbol << "\n";
+      }
+      _fsk_tx.current_symbol = next_symbol;
+      _fsk_tx.samples_in_symbol = 0;
+    } else {
+      std::cerr << "  [ERROR AUTONOMOUS] Invalid symbol from digital_link: "
+                << next_symbol << "\n";
+    }
+  }
+  // FALLBACK: Check if we completed a symbol period (timer-based mode)
+  else if (_fsk_tx.samples_in_symbol >= _fsk_tx.samples_per_symbol) {
+    if (in_debug_range) {
+      std::cout << "  [WARNING] Symbol period exceeded in JACK callback! "
+                << "samples_in_symbol=" << _fsk_tx.samples_in_symbol << "\n";
+    }
     _fsk_tx.samples_in_symbol = 0;
   }
+
+  // Track symbol changes
+  if (last_symbol != _fsk_tx.current_symbol) {
+    if (in_debug_range) {
+      std::cout << "  [SYMBOL CHANGE] " << last_symbol << " -> "
+                << _fsk_tx.current_symbol << "\n";
+    }
+    last_symbol = _fsk_tx.current_symbol;
+  }
+
+  block_count++;
 }
 
 // ============================================================================
@@ -760,13 +824,25 @@ void dsp_client::set_rx_fsk4_frequencies(float f1, float f2, float f3,
 }
 
 void dsp_client::set_fsk_symbol(int symbol) {
+  // CRITICAL FIX: Always reset counter, even if symbol doesn't change
+  // This prevents overflow when consecutive symbols are the same
   if (symbol >= 0 && symbol < 4) {
-    // Only reset if symbol actually changed
-    if (_fsk_tx.current_symbol != symbol) {
-      _fsk_tx.current_symbol = symbol;
-      _fsk_tx.samples_in_symbol = 0; // CRITICAL: Reset counter for new symbol
-      // Note: We don't reset phase to maintain phase continuity (CPM)
+    bool symbol_changed = (_fsk_tx.current_symbol != symbol);
+    _fsk_tx.current_symbol = symbol;
+    _fsk_tx.samples_in_symbol = 0; // Always reset counter
+
+    // Debug logging for symbol transitions
+    static int set_count = 0;
+    if (set_count >= 55 && set_count <= 65) {
+      std::cout << "[SET_SYMBOL] call " << set_count << ": sym=" << symbol
+                << " changed=" << (symbol_changed ? "YES" : "NO")
+                << " samples_in_sym=" << _fsk_tx.samples_in_symbol << "\n";
     }
+    set_count++;
+    // Note: We don't reset phase to maintain phase continuity (CPM)
+  } else {
+    std::cerr << "[ERROR] set_fsk_symbol() called with INVALID symbol: "
+              << symbol << " (valid range: 0-3)\n";
   }
 }
 

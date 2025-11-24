@@ -139,27 +139,37 @@ MainWindow::~MainWindow() {
 void MainWindow::on_start_modulation_pbutton_clicked() {
   _client.start_processing();
 
-  // Si estamos transmitiendo FSK-4 (o recibiendo en loopback), iniciar el timer
-  if ((_client.get_mode() == dsp_client::Mode::Transmit &&
-       _client.get_transmit_modulation() ==
-           dsp_client::ModulationScheme::FSK_4) ||
-      (_client.get_mode() == dsp_client::Mode::Receive &&
-       _client.get_receive_modulation() ==
-           dsp_client::ModulationScheme::FSK_4)) {
+  // SOLO comenzar TX digital si estamos transmitiendo FSK4
+  if (_client.get_mode() == dsp_client::Mode::Transmit &&
+      _client.get_transmit_modulation() ==
+          dsp_client::ModulationScheme::FSK_4) {
 
-    // Digital transmission removed
     _is_transmitting_digital = true;
-    // Calcular intervalo: samples_per_symbol / sample_rate * 1000 ms
-    // Por ejemplo: 1024 samples / 48000 Hz = 21.33 ms
+
+    // OPTION 1: AUTONOMOUS MODE (recommended - eliminates timer drift)
+    // Uncomment to enable autonomous transmission (JACK-driven)
+
+    _client.set_digital_link(&_digital_link);
+    _client.enable_autonomous_tx();
+    std::cout << "[MainWindow] ✓ AUTONOMOUS FSK-4 TX enabled (JACK-driven)\n";
+    std::cout << "  Total Symbols: " << _digital_link.get_tx_symbol_count()
+              << "\n";
+
+    /*
+    // OPTION 2: TIMER-BASED MODE (current - has drift issues)
+    // Comment out when using autonomous mode
     int interval_ms = (1024 * 1000) / 48000;
     _digital_tx_timer->start(interval_ms);
 
-    std::cout << "[MainWindow] Iniciando transmisión FSK-4, intervalo: "
+    std::cout << "[MainWindow] Starting TIMER-BASED FSK-4 TX, interval: "
               << interval_ms << " ms" << std::endl;
     std::cout << "  TX Ready: " << (_digital_link.tx_ready() ? "YES" : "NO")
               << "\n";
+    */
     std::cout << "  Total Symbols: " << _digital_link.get_tx_symbol_count()
               << "\n";
+    std::cout << "  NOTE: Timer-based mode may have drift. Consider autonomous "
+                 "mode.\n";
   }
 }
 
@@ -745,14 +755,22 @@ void MainWindow::on_digital_symbol_timer() {
 void MainWindow::on_digital_symbol_timer() {
   static int tx_counter = 0;
 
+  // Extended logging around symbol 60
+  bool in_debug_range = (tx_counter >= 55 && tx_counter <= 70);
+
   // 1) Solo correr si estamos transmitiendo
   if (_client.get_mode() != dsp_client::Mode::Transmit) {
+    if (in_debug_range) {
+      std::cout << "[TX TIMER " << tx_counter
+                << "] Not in transmit mode, stopping\n";
+    }
     return;
   }
 
   // 2) Si no hay payload listo, detener
   if (!_digital_link.tx_ready()) {
-    std::cout << "[TX] tx_ready=false, stopping digital timer\n";
+    std::cout << "[TX TIMER " << tx_counter
+              << "] tx_ready=false, stopping digital timer\n";
     _digital_tx_timer->stop();
     _is_transmitting_digital = false;
     tx_counter = 0;
@@ -762,9 +780,15 @@ void MainWindow::on_digital_symbol_timer() {
   // 3) Obtener siguiente símbolo
   int symbol = _digital_link.next_tx_symbol();
 
+  if (in_debug_range) {
+    std::cout << "[TX TIMER " << tx_counter
+              << "] next_tx_symbol() returned: " << symbol << "\n";
+  }
+
   // === FIX 5: si no hay más símbolos, terminar ===
   if (symbol < 0) {
-    std::cout << "[TX] Transmission completed\n";
+    std::cout << "[TX TIMER " << tx_counter
+              << "] Transmission completed (symbol < 0)\n";
     _digital_tx_timer->stop();
     _is_transmitting_digital = false;
     tx_counter = 0;
@@ -773,16 +797,18 @@ void MainWindow::on_digital_symbol_timer() {
 
   // === FIX 4: NO mandar símbolo 0 “default” ===
   if (symbol > 3) {
-    std::cout << "[ERROR] next_tx_symbol() devolvió símbolo inválido: "
-              << symbol << "\n";
+    std::cout << "[ERROR TX TIMER " << tx_counter
+              << "] next_tx_symbol() devolvió símbolo inválido: " << symbol
+              << "\n";
     return;
   }
 
   // 4) Mandar símbolo real
   _client.set_fsk_symbol(symbol);
 
-  if (tx_counter % 10 == 0) {
-    std::cout << "[TX] Symbol " << tx_counter << ": " << symbol << "\n";
+  if (in_debug_range || tx_counter % 10 == 0) {
+    std::cout << "[TX TIMER " << tx_counter << "] Symbol sent: " << symbol
+              << " (index: " << tx_counter << ")\n";
   }
 
   tx_counter++;

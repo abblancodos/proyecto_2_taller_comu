@@ -300,6 +300,19 @@ public:
   // NEW: FSK transmitter control (called from non-RT thread)
   void set_fsk_symbol(int symbol); // Set next symbol to transmit (0-3)
   int get_current_fsk_symbol() const { return _fsk_tx.current_symbol; }
+
+  // NEW: Set digital link for autonomous symbol management
+  void set_digital_link(comm::DigitalLink *link) { _digital_link = link; }
+
+  // NEW: Enable/disable autonomous TX (JACK-driven symbol fetch)
+  void enable_autonomous_tx() { _autonomous_tx = true; }
+  void disable_autonomous_tx() { _autonomous_tx = false; }
+  bool is_autonomous_tx() const { return _autonomous_tx; }
+
+private:
+  // NEW: Pointer to digital link for autonomous TX
+  comm::DigitalLink *_digital_link = nullptr;
+  bool _autonomous_tx = false; // Flag to enable/disable autonomous symbol fetch
 };
 
 /*
