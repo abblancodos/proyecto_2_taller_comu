@@ -146,14 +146,25 @@ void MainWindow::on_start_modulation_pbutton_clicked() {
 
     _is_transmitting_digital = true;
 
-    // OPTION 1: AUTONOMOUS MODE (recommended - eliminates timer drift)
-    // Uncomment to enable autonomous transmission (JACK-driven)
-
+    // AUTONOMOUS MODE (JACK-driven, no timer drift)
     _client.set_digital_link(&_digital_link);
     _client.enable_autonomous_tx();
-    std::cout << "[MainWindow] ✓ AUTONOMOUS FSK-4 TX enabled (JACK-driven)\n";
-    std::cout << "  Total Symbols: " << _digital_link.get_tx_symbol_count()
-              << "\n";
+
+    // Start data rate calculator
+    _data_rate_calc.start();
+
+    // Calculate transmission metrics
+    size_t total_symbols = _digital_link.get_tx_symbol_count();
+    float symbol_rate = 48000.0f / 64.0f; // samples_per_symbol = 64
+    float tx_time_seconds = total_symbols / symbol_rate;
+    float data_rate_bps = symbol_rate * 2; // 2 bits per FSK-4 symbol
+
+    std::cout << "[MainWindow] ✓ AUTONOMOUS FSK-4 TX enabled\n";
+    std::cout << "  Total Symbols: " << total_symbols << "\n";
+    std::cout << "  Symbol Rate: " << symbol_rate << " symbols/sec (750 Hz)\n";
+    std::cout << "  Data Rate: " << data_rate_bps << " bits/sec (1500 bps)\n";
+    std::cout << "  Estimated TX Time: " << tx_time_seconds << " seconds ("
+              << (tx_time_seconds / 60.0f) << " minutes)\n";
 
     /*
     // OPTION 2: TIMER-BASED MODE (current - has drift issues)
@@ -166,8 +177,6 @@ void MainWindow::on_start_modulation_pbutton_clicked() {
     std::cout << "  TX Ready: " << (_digital_link.tx_ready() ? "YES" : "NO")
               << "\n";
     */
-    std::cout << "  Total Symbols: " << _digital_link.get_tx_symbol_count()
-              << "\n";
     std::cout << "  NOTE: Timer-based mode may have drift. Consider autonomous "
                  "mode.\n";
   }
@@ -559,18 +568,20 @@ void MainWindow::on_fileButton_clicked() {
         _client.get_receive_modulation() ==
             dsp_client::ModulationScheme::FSK_4) {
 
-      // CORREGIDO: Usar digital_link en lugar de wav_buffer
-      if (load_wav_to_digital_link(fileName)) {
+      // Use new auto-detect method
+      if (detect_and_load_file(fileName)) {
+        QString file_type = _is_binary_file ? "Binary File" : "WAV Audio";
         QMessageBox::information(this, "FSK-4 Digital Mode",
-                                 QString("WAV cargado y preparado:\n"
-                                         "%1 símbolos totales\n"
-                                         "Listo para transmisión digital FSK-4")
+                                 QString("%1 loaded:\n"
+                                         "%2 symbols total\n"
+                                         "Ready for FSK-4 transmission")
+                                     .arg(file_type)
                                      .arg(_digital_link.get_tx_symbol_count()));
 
-        std::cout << "[MainWindow] WAV procesado para transmisión digital"
+        std::cout << "[MainWindow] File processed for digital transmission"
                   << std::endl;
       } else {
-        QMessageBox::warning(this, "Error", "No se pudo cargar el archivo WAV");
+        QMessageBox::warning(this, "Error", "Could not load file");
       }
     } else {
       // Modo normal: añadir archivo a la cola de reproducción
@@ -681,6 +692,58 @@ void MainWindow::on_receive_digital_button_clicked() {
 // ============================================================================
 // Digital Link Integration
 // ============================================================================
+
+// NEW: Detect file type and load appropriately
+bool MainWindow::detect_and_load_file(const QString &filename) {
+  QFile info(filename);
+  QFileInfo fileInfo(filename);
+
+  _loaded_file_name = fileInfo.fileName();              // "example.txt"
+  _loaded_file_extension = fileInfo.suffix().toLower(); // "txt"
+
+  std::cout << "[MainWindow] Loading file: " << _loaded_file_name.toStdString()
+            << "\n";
+  std::cout << "  Extension: " << _loaded_file_extension.toStdString() << "\n";
+
+  // Detect file type by extension
+  if (_loaded_file_extension == "wav") {
+    // WAV audio file
+    _is_binary_file = false;
+
+    if (!_digital_link.load_wav(filename.toStdString())) {
+      std::cerr << "[MainWindow] Failed to load WAV file\n";
+      return false;
+    }
+  } else if (_loaded_file_extension == "txt" ||
+             _loaded_file_extension == "pdf" ||
+             _loaded_file_extension == "png" ||
+             _loaded_file_extension == "jpg" ||
+             _loaded_file_extension == "jpeg" ||
+             _loaded_file_extension == "bmp") {
+    // Binary file (TXT, PDF, images)
+    _is_binary_file = true;
+
+    if (!_digital_link.load_binary_file(filename.toStdString())) {
+      std::cerr << "[MainWindow] Failed to load binary file\n";
+      return false;
+    }
+  } else {
+    std::cerr << "[MainWindow] Unsupported file type: ."
+              << _loaded_file_extension.toStdString() << "\n";
+    return false;
+  }
+
+  // Prepare transmission payload
+  if (!_digital_link.prepare_tx_payload()) {
+    std::cerr << "[MainWindow] Failed to prepare TX payload\n";
+    return false;
+  }
+
+  _loaded_wav_path = filename;
+  std::cout << "[MainWindow] File loaded and prepared for transmission\n";
+
+  return true;
+}
 
 bool MainWindow::load_wav_to_digital_link(const QString &filename) {
   if (!_digital_link.load_wav(filename.toStdString())) {
@@ -824,11 +887,27 @@ void MainWindow::process_rx_symbols() {
     return;
   }
 
+  // Update data rate calculator
+  _data_rate_calc.add_symbols(symbols.size());
+
   // Process all symbols
   for (uint8_t symbol : symbols) {
     // Feed symbol to digital link
     _digital_link.process_rx_symbol(symbol);
     _symbols_received++;
+  }
+
+  // Display metrics every 100 symbols
+  static int metric_counter = 0;
+  if (++metric_counter % 100 == 0) {
+    float actual_symbol_rate = _data_rate_calc.get_symbol_rate();
+    float actual_data_rate = _data_rate_calc.get_data_rate_bps();
+    float ber = _ber_calculator.get_ber();
+
+    std::cout << "[RX METRICS] Symbols: " << _data_rate_calc.get_total_symbols()
+              << " | Symbol Rate: " << actual_symbol_rate << " Hz"
+              << " | Data Rate: " << actual_data_rate << " bps"
+              << " | BER: " << ber << "\n";
   }
 
   // Check if frame is complete
@@ -837,35 +916,65 @@ void MainWindow::process_rx_symbols() {
     std::cout << "[MainWindow] ✓ FRAME RECEIVED!\n";
     std::cout << "========================================\n";
 
-    // Save reconstructed WAV
-    QString output_path = "/tmp/received_audio.wav";
-    if (_digital_link.save_received_wav(output_path.toStdString())) {
-      std::cout << "  Sample rate: " << _digital_link.get_sample_rate()
-                << " Hz\n";
-      std::cout << "  Channels: " << _digital_link.get_channels() << "\n";
-      std::cout << "  Symbols received: " << _symbols_received << "\n";
-      std::cout << "  Saved to: " << output_path.toStdString() << "\n";
+    // Determine file type and output path
+    QString base_name = QFileInfo(_loaded_file_name)
+                            .completeBaseName(); // "example" from "example.txt"
+    QString extension = _loaded_file_extension;  // "txt", "wav", "pdf", etc.
+    QString output_path = base_name + "_rx." + extension; // "example_rx.txt"
 
-      // Automatically play through JACK
-      if (add_file(output_path.toStdString())) {
-        std::cout << "  ♪ Playing audio through speakers...\n";
+    bool save_success = false;
 
-        // Switch to Passthrough mode to hear the playback
-        // (In Passthrough, 'in' comes from the file because of add_file, and is
-        // copied to 'out')
-        _client.set_mode(dsp_client::Mode::Passthrough);
+    if (_is_binary_file) {
+      // Save binary file (TXT, PDF, PNG, JPG, etc.)
+      save_success =
+          _digital_link.save_received_binary(output_path.toStdString());
 
-        // Update UI to reflect mode change (optional but good for consistency)
-        // We might want to uncheck the Receive button or update status
-        std::cout << "[MainWindow] Switched to Passthrough mode for playback\n";
-      } else {
-        std::cerr << "  Failed to queue audio for playback\n";
+      if (save_success) {
+        std::cout << "  Binary file saved: " << output_path.toStdString()
+                  << "\n";
+        std::cout << "  Original file: " << _loaded_file_name.toStdString()
+                  << "\n";
+        std::cout << "  Compare with: diff " << _loaded_wav_path.toStdString()
+                  << " " << output_path.toStdString() << "\n";
       }
-      std::cout << "========================================\n\n";
+    } else {
+      // Save WAV audio
+      save_success = _digital_link.save_received_wav(output_path.toStdString());
 
-      // Reset for next frame
-      _digital_link.reset_rx();
-      _symbols_received = 0;
+      if (save_success) {
+        std::cout << "  Sample rate: " << _digital_link.get_sample_rate()
+                  << " Hz\n";
+        std::cout << "  Channels: " << _digital_link.get_channels() << "\n";
+        std::cout << "  WAV saved: " << output_path.toStdString() << "\n";
+
+        // Auto-play WAV files
+        if (add_file(output_path.toStdString())) {
+          std::cout << "  ♪ Playing audio through speakers...\n";
+          _client.set_mode(dsp_client::Mode::Passthrough);
+        }
+      }
     }
+
+    if (save_success) {
+      std::cout << "  Symbols received: " << _symbols_received << "\n";
+
+      // Final metrics
+      float final_symbol_rate = _data_rate_calc.get_symbol_rate();
+      float final_data_rate = _data_rate_calc.get_data_rate_bps();
+      float final_ber = _ber_calculator.get_ber();
+
+      std::cout << "  Final Symbol Rate: " << final_symbol_rate << " Hz\n";
+      std::cout << "  Final Data Rate: " << final_data_rate << " bps\n";
+      std::cout << "  Final BER: " << final_ber << "\n";
+      std::cout << "========================================\n\n";
+    } else {
+      std::cerr << "  Failed to save received file\n";
+    }
+
+    // Reset for next frame
+    _digital_link.reset_rx();
+    _symbols_received = 0;
+    _ber_calculator.reset();
+    _data_rate_calc = comm::DataRateCalculator(); // Reset
   }
 }

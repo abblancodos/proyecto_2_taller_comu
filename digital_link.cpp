@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 
 namespace comm {
@@ -110,6 +111,56 @@ bool DigitalLink::load_wav(const std::string &path) {
   return true;
 }
 
+// NEW: Load any binary file (TXT, PDF, PNG, JPG, etc.)
+bool DigitalLink::load_binary_file(const std::string &path) {
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    std::cerr << "[DigitalLink] Error opening binary file: " << path << "\n";
+    return false;
+  }
+
+  // Get file size
+  std::streamsize size = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  // Read entire file into vector
+  std::vector<uint8_t> file_data(size);
+  if (!file.read(reinterpret_cast<char *>(file_data.data()), size)) {
+    std::cerr << "[DigitalLink] Error reading binary file\n";
+    return false;
+  }
+  file.close();
+
+  std::cout << "[DigitalLink] Loaded binary file: " << size << " bytes\n";
+  std::cout << "  Path: " << path << "\n";
+
+  // Clear PCM samples (not used for binary files)
+  _pcm_samples.clear();
+
+  // Convert file bytes to bits for transmission
+  _tx_bits.clear();
+  _tx_bits.reserve(file_data.size() * 8);
+
+  for (uint8_t byte : file_data) {
+    for (int i = 0; i < 8; ++i) {
+      _tx_bits.push_back((byte >> i) & 1); // LSB first
+    }
+  }
+
+  std::cout << "  Total bits: " << _tx_bits.size() << "\n";
+  std::cout << "  First 32 bytes (hex): ";
+  for (size_t i = 0; i < std::min(size_t(32), file_data.size()); ++i) {
+    printf("%02x ", file_data[i]);
+  }
+  std::cout << "\n";
+
+  // Set metadata (not WAV-specific)
+  _sample_rate = 0; // Indicates non-WAV file
+  _channels = 0;
+
+  return true;
+}
+
 // Debug version + sanity checks
 void DigitalLink::pcm_to_bits() {
   _tx_bits.clear();
@@ -175,18 +226,43 @@ void DigitalLink::pcm_to_bits() {
 }
 
 bool DigitalLink::prepare_tx_payload() {
-  if (_pcm_samples.empty())
-    return false;
+  std::cout << "[DigitalLink] prepare_tx_payload() called\n";
 
-  // RESET test
+  // For binary files, _tx_bits is already populated by load_binary_file()
+  // For WAV files, need to convert PCM to bits
+  if (_sample_rate != 0) {
+    // WAV file - convert PCM to bits
+    std::cout << "  Converting WAV PCM to bits...\n";
+    pcm_to_bits();
+  } else {
+    // Binary file - bits already prepared
+    std::cout << "  Binary file - using pre-loaded bits\n";
+    std::cout << "  Total bits: " << _tx_bits.size() << "\n";
+  }
+
+  // If _sample_rate is 0 (binary file) and _tx_bits is empty, or if it's a WAV
+  // file and _pcm_samples is empty (meaning pcm_to_bits would have done nothing
+  // or there was no WAV data), then we can't prepare a payload.
+  if (_tx_bits.empty() && _pcm_samples.empty()) {
+    std::cerr
+        << "[DigitalLink] Error: No data (PCM or binary) to prepare payload.\n";
+    return false;
+  }
+
+  // RESET transmitter state
   _tx_ready = false;
   _tx_symbol_index = 0;
-  _tx_bits.clear();
+
+  // Only clear bits for WAV files (binary files already have _tx_bits
+  // populated)
+  if (_sample_rate != 0) {
+    _tx_bits.clear();
+  }
+
   _tx_bits_enc.clear();
   _tx_symbols.clear();
 
-  // 1. PCM -> Bits
-  pcm_to_bits();
+  // pcm_to_bits(); // REMOVED - already called above conditionally
 
   // 2. FEC Encoding
   _enc.encode_block(_tx_bits, _tx_bits_enc);
@@ -413,8 +489,29 @@ void DigitalLink::process_rx_symbol(uint8_t symbol) {
   std::vector<uint8_t> decoded_bits;
   _dec.decode_hard(payload_bits, decoded_bits);
 
-  // 8) Bits → PCM
-  bits_to_pcm(decoded_bits);
+  // 8) Check if this is a binary file or WAV
+  if (_rx_sample_rate == 0 && _rx_channels == 0) {
+    // Binary file (TXT, PDF, image, etc.)
+    // Convert bits -> bytes
+    _rx_binary_data.clear();
+    _rx_binary_data.reserve(decoded_bits.size() / 8);
+
+    for (size_t i = 0; i < decoded_bits.size(); i += 8) {
+      uint8_t byte = 0;
+      for (int b = 0; b < 8 && (i + b) < decoded_bits.size(); ++b) {
+        if (decoded_bits[i + b]) {
+          byte |= (1 << b); // LSB first
+        }
+      }
+      _rx_binary_data.push_back(byte);
+    }
+
+    std::cout << "[DigitalLink] Binary file received: "
+              << _rx_binary_data.size() << " bytes\n";
+  } else {
+    // WAV file: Bits → PCM
+    bits_to_pcm(decoded_bits);
+  }
 
   _frame_complete = true;
   _rx_symbol_buffer.clear();
@@ -460,6 +557,27 @@ bool DigitalLink::save_received_wav(const std::string &path) {
 
   sf_write_short(sf, _pcm_rx.data(), _pcm_rx.size());
   sf_close(sf);
+
+  return true;
+}
+
+// NEW: Save received binary file
+bool DigitalLink::save_received_binary(const std::string &path) {
+  if (!_frame_complete || _rx_binary_data.empty())
+    return false;
+
+  std::ofstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    std::cerr << "[DigitalLink] Error creating binary file: " << path << "\n";
+    return false;
+  }
+
+  file.write(reinterpret_cast<const char *>(_rx_binary_data.data()),
+             _rx_binary_data.size());
+  file.close();
+
+  std::cout << "[DigitalLink] Binary file saved: " << path << "\n";
+  std::cout << "  Size: " << _rx_binary_data.size() << " bytes\n";
 
   return true;
 }

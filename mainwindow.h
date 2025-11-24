@@ -12,6 +12,7 @@
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
+#include "analysis_tools.h" // NEW: Analysis tools for BER, eye diagram, etc.
 #include "digital_link.h"
 #include <QFileDialog>
 #include <QMainWindow>
@@ -185,9 +186,18 @@ private:
   // Digital Link for packet framing and FEC
   comm::DigitalLink _digital_link;
   QString _loaded_wav_path;
+  QString _loaded_file_name;      // NEW: Original filename with extension
+  QString _loaded_file_extension; // NEW: .txt, .pdf, .png, etc.
+  bool _is_binary_file;           // NEW: true if TXT/PDF/image, false if WAV
+
+  // NEW: Analysis tools for digital modulation
+  comm::BERCalculator _ber_calculator;
+  comm::DataRateCalculator _data_rate_calc;
 
   // Helper methods for digital link
   bool load_wav_to_digital_link(const QString &filename);
+  bool
+  detect_and_load_file(const QString &filename); // NEW: Auto-detect file type
   void start_digital_transmission();
   void stop_digital_transmission();
   void on_digital_symbol_timer();

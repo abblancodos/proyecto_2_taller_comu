@@ -256,7 +256,8 @@ private:
 
     FSKTransmitter()
         : phase(0.0f), current_freq(1000.0f), current_symbol(0),
-          samples_in_symbol(0), samples_per_symbol(1024) {}
+          samples_in_symbol(0), samples_per_symbol(64) {
+    } // Optimized: 64 samples/symbol (750 baud)
 
     void reset() {
       phase = 0.0f;

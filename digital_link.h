@@ -21,6 +21,9 @@ public:
   /// Load WAV file (mono/stereo -> mono)
   bool load_wav(const std::string &path);
 
+  /// Load ANY binary file (TXT, PDF, images, etc.)
+  bool load_binary_file(const std::string &path);
+
   /// Prepare payload: PCM -> bits -> FEC -> Frame (Preamble+Header+Payload+CRC)
   /// -> Symbols
   bool prepare_tx_payload();
@@ -57,9 +60,17 @@ public:
   /// Save received audio to WAV
   bool save_received_wav(const std::string &path);
 
+  /// Save received binary file (TXT, PDF, images, etc.)
+  bool save_received_binary(const std::string &path);
+
   /// Getters for received metadata
   int get_sample_rate() const { return _rx_sample_rate; }
   int get_channels() const { return _rx_channels; }
+
+  /// Get received binary data (for non-WAV files)
+  const std::vector<uint8_t> &get_received_data() const {
+    return _rx_binary_data;
+  }
 
 private:
   // Helpers
@@ -86,6 +97,7 @@ private:
   bool _frame_complete;
   int _rx_sample_rate;
   int _rx_channels;
+  std::vector<uint8_t> _rx_binary_data; // NEW: For non-WAV files
 
   // FEC
   conv::ConvolutionalEncoder _enc;
