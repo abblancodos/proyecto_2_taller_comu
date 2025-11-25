@@ -11,9 +11,11 @@
 
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
+#pragma once
 
 #include "analysis_tools.h" // NEW: Analysis tools for BER, eye diagram, etc.
 #include "digital_link.h"
+#include "qcustomplot.h"
 #include <QFileDialog>
 #include <QMainWindow>
 #include <QTimer>
@@ -202,6 +204,17 @@ private:
   void stop_digital_transmission();
   void on_digital_symbol_timer();
   void process_rx_symbols();
+
+  // Visualization methods
+  void setup_constellation_plot();
+  void setup_eye_diagram_plot();
+  void update_constellation(const std::array<float, 4> &magnitudes,
+                            int detected_symbol);
+  void update_eye_diagram(const float *samples, size_t count);
+
+  // Visualization widgets
+  QCustomPlot *_constellation_plot;
+  QCustomPlot *_eye_diagram_plot;
 };
 
 #endif // MAINWINDOW_H

@@ -245,7 +245,42 @@ public:
   // Retrieve all pending symbols from the queue
   std::vector<uint8_t> get_rx_symbols();
 
+  // Clear RX symbol queue (call before TX to remove accumulated noise)
+  void clear_rx_buffer() {
+    _queue_head.store(0);
+    _queue_tail.store(0);
+  }
+
+  // Get latest FSK-4 magnitudes for constellation plot
+  std::array<float, 4> get_fsk_magnitudes() const {
+    int current = _fsk4_current_buffer.load();
+    return _fsk4_buffer[current].magnitudes;
+  }
+
+  // Get latest detected FSK symbol
+  int get_latest_fsk_symbol() const {
+    int current = _fsk4_current_buffer.load();
+    return _fsk4_buffer[current].strongest_index;
+  }
+
+  // Get I/Q samples for constellation plot (returns last N samples)
+  struct IQSample {
+    float I;
+    float Q;
+  };
+  std::vector<IQSample> get_iq_samples(size_t count = 500) const {
+    std::lock_guard<std::mutex> lock(_iq_mutex);
+    size_t available = std::min(count, _iq_samples.size());
+    return std::vector<IQSample>(_iq_samples.end() - available,
+                                 _iq_samples.end());
+  }
+
 private:
+  // I/Q constellation data
+  mutable std::mutex _iq_mutex;
+  std::vector<IQSample> _iq_samples;
+  static constexpr size_t MAX_IQ_SAMPLES = 2000;
+
   // FSK transmitter state
   struct FSKTransmitter {
     float phase;

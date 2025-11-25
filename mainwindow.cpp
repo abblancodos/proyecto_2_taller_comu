@@ -121,6 +121,34 @@ MainWindow::MainWindow(QWidget *parent)
   // Inicializar controladores digitales
   _is_transmitting_digital = false;
 
+  // Timer para  // Process symbols every 20ms (50 Hz)
+  connect(_fsk_update_timer.get(), &QTimer::timeout, this,
+          &MainWindow::process_rx_symbols);
+  _fsk_update_timer->start(20);
+
+  // Setup constellation and eye diagram plots as independent windows
+  _constellation_plot = new QCustomPlot(); // No parent - independent window
+  _eye_diagram_plot = new QCustomPlot();   // No parent - independent window
+
+  // Set window flags for independent floating windows
+  _constellation_plot->setWindowFlags(Qt::Window);
+  _eye_diagram_plot->setWindowFlags(Qt::Window);
+
+  setup_constellation_plot();
+  setup_eye_diagram_plot();
+
+  // Show as independent windows with titles
+  _constellation_plot->setWindowTitle("FSK-4 Constellation Diagram");
+  _constellation_plot->resize(500, 500);
+  _constellation_plot->show();
+
+  _eye_diagram_plot->setWindowTitle("Eye Diagram");
+  _eye_diagram_plot->resize(700, 500);
+  _eye_diagram_plot->show();
+
+  std::cout << "[MainWindow] Constellation and Eye Diagram independent windows "
+               "created\n";
+
   // Timer para transmisión digital FSK
   connect(_digital_tx_timer.get(), &QTimer::timeout, this,
           &MainWindow::on_digital_symbol_timer);
@@ -137,51 +165,48 @@ MainWindow::~MainWindow() {
 
 // Play button - start processing
 void MainWindow::on_start_modulation_pbutton_clicked() {
-  _client.start_processing();
-
-  // SOLO comenzar TX digital si estamos transmitiendo FSK4
+  // For FSK-4 TX: STOP, configure autonomous, then START fresh
   if (_client.get_mode() == dsp_client::Mode::Transmit &&
       _client.get_transmit_modulation() ==
           dsp_client::ModulationScheme::FSK_4) {
 
     _is_transmitting_digital = true;
 
-    // AUTONOMOUS MODE (JACK-driven, no timer drift)
+    // CRITICAL: STOP JACK first if it's running from RX mode
+    _client.stop_processing();
+    std::cout << "[MainWindow] Stopped JACK to configure TX\n";
+
+    // Setup autonomous TX while JACK is stopped
     _client.set_digital_link(&_digital_link);
     _client.enable_autonomous_tx();
+    std::cout << "[MainWindow] ✓ Autonomous TX configured (JACK stopped)\n";
 
-    // Start data rate calculator
+    // Clear RX noise
+    _client.clear_rx_buffer();
+
+    // Calculate metrics
+    size_t total_symbols = _digital_link.get_tx_symbol_count();
+    float symbol_rate = 48000.0f / 64.0f;
+    float tx_time_seconds = total_symbols / symbol_rate;
+    float data_rate_bps = symbol_rate * 2;
+
+    std::cout << "[MainWindow] TX Ready:\n";
+    std::cout << "  Symbols: " << total_symbols << "\n";
+    std::cout << "  Rate: " << data_rate_bps << " bps\n";
+    std::cout << "  Time: " << tx_time_seconds << " sec\n";
+
     _data_rate_calc.start();
 
-    // Calculate transmission metrics
-    size_t total_symbols = _digital_link.get_tx_symbol_count();
-    float symbol_rate = 48000.0f / 64.0f; // samples_per_symbol = 64
-    float tx_time_seconds = total_symbols / symbol_rate;
-    float data_rate_bps = symbol_rate * 2; // 2 bits per FSK-4 symbol
-
-    std::cout << "[MainWindow] ✓ AUTONOMOUS FSK-4 TX enabled\n";
-    std::cout << "  Total Symbols: " << total_symbols << "\n";
-    std::cout << "  Symbol Rate: " << symbol_rate << " symbols/sec (750 Hz)\n";
-    std::cout << "  Data Rate: " << data_rate_bps << " bits/sec (1500 bps)\n";
-    std::cout << "  Estimated TX Time: " << tx_time_seconds << " seconds ("
-              << (tx_time_seconds / 60.0f) << " minutes)\n";
-
-    /*
-    // OPTION 2: TIMER-BASED MODE (current - has drift issues)
-    // Comment out when using autonomous mode
-    int interval_ms = (1024 * 1000) / 48000;
-    _digital_tx_timer->start(interval_ms);
-
-    std::cout << "[MainWindow] Starting TIMER-BASED FSK-4 TX, interval: "
-              << interval_ms << " ms" << std::endl;
-    std::cout << "  TX Ready: " << (_digital_link.tx_ready() ? "YES" : "NO")
-              << "\n";
-    */
-    std::cout << "  NOTE: Timer-based mode may have drift. Consider autonomous "
-                 "mode.\n";
+    // NOW start JACK fresh from block 1 with autonomous active
+    _client.start_processing();
+    std::cout
+        << "[MainWindow] ✓ JACK restarted with AUTONOMOUS=ON from block 1\n";
+  } else {
+    // RX or SSB mode - just start processing
+    _client.start_processing();
+    std::cout << "[MainWindow] JACK started (RX/SSB mode)\n";
   }
 }
-
 // Si estamos en TX y la modulación seleccionada es 4-FSK, arrancar TX digital
 void MainWindow::on_stop_modulation_pbutton_clicked() {
 
@@ -208,6 +233,10 @@ void MainWindow::on_passthrough_mode_pbutton_clicked() {
 // Transmit radio button
 void MainWindow::on_transmitButton_toggled(bool checked) {
   if (checked) {
+    // CRITICAL: STOP JACK first to prevent premature TX
+    _client.stop_processing();
+    std::cout << "[MainWindow] ⚠️  JACK STOPPED when switching to TX mode\n";
+
     _client.set_mode(dsp_client::Mode::Transmit);
 
     // JACK connections: Automatic loopback for testing
@@ -225,7 +254,7 @@ void MainWindow::on_transmitButton_toggled(bool checked) {
       std::cout << "[JACK] TX mode: Loopback + speakers connected" << std::endl;
     }
 
-    // Si es FSK-4, preparar transmisin digital
+    // Si es FSK-4, preparar transmisión digital
     if (_client.get_transmit_modulation() ==
         dsp_client::ModulationScheme::FSK_4) {
       if (!_wav_buffer.empty()) {
@@ -238,11 +267,11 @@ void MainWindow::on_transmitButton_toggled(bool checked) {
         // Solo si no hay WAV cargado, generar datos de prueba
         std::cout << "[ADVERTENCIA] No hay WAV cargado, usando datos de prueba"
                   << std::endl;
-        // _digital// _tx_controller->prepare_test_payload();
       }
     }
 
     std::cout << "[MainWindow] Modo Transmit activado" << std::endl;
+    std::cout << "            ⚠️  Press 'Play' to start TX (JACK is STOPPED)\n";
   }
 }
 
@@ -897,19 +926,24 @@ void MainWindow::process_rx_symbols() {
     _symbols_received++;
   }
 
-  // Display metrics every 100 symbols
-  static int metric_counter = 0;
-  if (++metric_counter % 100 == 0) {
-    float actual_symbol_rate = _data_rate_calc.get_symbol_rate();
-    float actual_data_rate = _data_rate_calc.get_data_rate_bps();
-    float ber = _ber_calculator.get_ber();
+  // Display metrics in real-time (every 50 symbols)
+  if (_symbols_received % 50 == 0 && _symbols_received > 0) {
+    float current_symbol_rate = _data_rate_calc.get_symbol_rate();
+    float current_data_rate = _data_rate_calc.get_data_rate_bps();
+    float current_ber = _ber_calculator.get_ber();
 
-    std::cout << "[RX METRICS] Symbols: " << _data_rate_calc.get_total_symbols()
-              << " | Symbol Rate: " << actual_symbol_rate << " Hz"
-              << " | Data Rate: " << actual_data_rate << " bps"
-              << " | BER: " << ber << "\n";
+    std::cout << "[RX METRICS] Symbols: " << _symbols_received
+              << " | Symbol Rate: " << current_symbol_rate << " Hz"
+              << " | Data Rate: " << current_data_rate << " bps"
+              << " | BER: " << (current_ber * 100.0f) << "%\n";
   }
 
+  // Update constellation plot (every 10 symbols)
+  if (_symbols_received % 10 == 0 && _symbols_received > 0) {
+    auto magnitudes = _client.get_fsk_magnitudes();
+    int latest_symbol = _client.get_latest_fsk_symbol();
+    update_constellation(magnitudes, latest_symbol);
+  }
   // Check if frame is complete
   if (_digital_link.frame_complete()) {
     std::cout << "\n========================================\n";
@@ -976,5 +1010,162 @@ void MainWindow::process_rx_symbols() {
     _symbols_received = 0;
     _ber_calculator.reset();
     _data_rate_calc = comm::DataRateCalculator(); // Reset
+  }
+}
+
+// ============================================================================
+// Visualization: Constellation Diagram
+// ============================================================================
+
+void MainWindow::setup_constellation_plot() {
+  _constellation_plot->setMinimumSize(500, 500);
+
+  // Single scatter plot for all I/Q points
+  _constellation_plot->addGraph();
+  _constellation_plot->graph(0)->setLineStyle(QCPGraph::lsNone);
+  _constellation_plot->graph(0)->setScatterStyle(
+      QCPScatterStyle(QCPScatterStyle::ssDisc, QColor(0, 100, 255, 150), 3));
+
+  // Labels and titles
+  _constellation_plot->xAxis->setLabel("In-Phase (I)");
+  _constellation_plot->yAxis->setLabel("Quadrature (Q)");
+  _constellation_plot->plotLayout()->insertRow(0);
+  _constellation_plot->plotLayout()->addElement(
+      0, 0,
+      new QCPTextElement(_constellation_plot, "FSK-4 Constellation (I/Q)",
+                         QFont("sans", 12, QFont::Bold)));
+
+  // Set symmetric axis ranges for I/Q plane
+  _constellation_plot->xAxis->setRange(-1.2, 1.2);
+  _constellation_plot->yAxis->setRange(-1.2, 1.2);
+
+  // Add grid and reference circle
+  _constellation_plot->xAxis->grid()->setVisible(true);
+  _constellation_plot->yAxis->grid()->setVisible(true);
+
+  // Equal aspect ratio for I/Q plot
+  _constellation_plot->yAxis->setScaleRatio(_constellation_plot->xAxis, 1.0);
+
+  // Add quadrant text labels (11, 10, 00, 01)
+  // Quadrant I (+I, +Q) = 11
+  QCPItemText *q1_label = new QCPItemText(_constellation_plot);
+  q1_label->position->setCoords(0.9, 0.9);
+  q1_label->setText("11\n(+I,+Q)");
+  q1_label->setFont(QFont("sans", 9));
+  q1_label->setColor(QColor(100, 100, 100));
+
+  // Quadrant II (-I, +Q) = 10
+  QCPItemText *q2_label = new QCPItemText(_constellation_plot);
+  q2_label->position->setCoords(-0.9, 0.9);
+  q2_label->setText("10\n(-I,+Q)");
+  q2_label->setFont(QFont("sans", 9));
+  q2_label->setColor(QColor(100, 100, 100));
+
+  // Quadrant III (-I, -Q) = 00
+  QCPItemText *q3_label = new QCPItemText(_constellation_plot);
+  q3_label->position->setCoords(-0.9, -0.9);
+  q3_label->setText("00\n(-I,-Q)");
+  q3_label->setFont(QFont("sans", 9));
+  q3_label->setColor(QColor(100, 100, 100));
+
+  // Quadrant IV (+I, -Q) = 01
+  QCPItemText *q4_label = new QCPItemText(_constellation_plot);
+  q4_label->position->setCoords(0.9, -0.9);
+  q4_label->setText("01\n(+I,-Q)");
+  q4_label->setFont(QFont("sans", 9));
+  q4_label->setColor(QColor(100, 100, 100));
+
+  std::cout << "[Visualization] FSK-4 I/Q constellation initialized with "
+               "quadrant labels\n";
+}
+
+void MainWindow::update_constellation(const std::array<float, 4> &magnitudes,
+                                      int detected_symbol) {
+  (void)magnitudes;
+  (void)detected_symbol;
+
+  // Get I/Q samples from DSP client
+  auto iq_samples = _client.get_iq_samples(500); // Last 500 samples
+
+  if (iq_samples.empty()) {
+    return;
+  }
+
+  // ACCUMULATE points - don't clear, just add new ones
+  // Only limit total count to prevent memory issues
+  if (_constellation_plot->graph(0)->dataCount() > 5000) {
+    // Remove oldest 1000 points when we hit 5000
+    auto data = _constellation_plot->graph(0)->data();
+    auto it = data->constBegin();
+    for (int i = 0; i < 1000 && it != data->constEnd(); ++i, ++it) {
+      data->remove(it->key);
+    }
+  }
+
+  // Add new samples
+  for (const auto &sample : iq_samples) {
+    _constellation_plot->graph(0)->addData(sample.I, sample.Q);
+  }
+
+  _constellation_plot->replot();
+}
+
+// ============================================================================
+// Visualization: Eye Diagram
+// ============================================================================
+
+void MainWindow::setup_eye_diagram_plot() {
+  _eye_diagram_plot->setMinimumSize(600, 400);
+
+  // Add multiple graphs for overlaying traces
+  for (int i = 0; i < 20; ++i) {
+    _eye_diagram_plot->addGraph();
+    _eye_diagram_plot->graph(i)->setPen(
+        QPen(QColor(0, 100, 200, 100))); // Semi-transparent blue
+  }
+
+  // Labels and titles
+  _eye_diagram_plot->xAxis->setLabel("Sample Index");
+  _eye_diagram_plot->yAxis->setLabel("Amplitude");
+  _eye_diagram_plot->plotLayout()->insertRow(0);
+  _eye_diagram_plot->plotLayout()->addElement(
+      0, 0,
+      new QCPTextElement(_eye_diagram_plot, "Eye Diagram",
+                         QFont("sans", 12, QFont::Bold)));
+
+  // Set axis ranges
+  _eye_diagram_plot->xAxis->setRange(0, 64); // 64 samples per symbol
+  _eye_diagram_plot->yAxis->setRange(-1.0, 1.0);
+
+  // Add grid
+  _eye_diagram_plot->xAxis->grid()->setVisible(true);
+  _eye_diagram_plot->yAxis->grid()->setVisible(true);
+
+  std::cout << "[Visualization] Eye diagram plot initialized\n";
+}
+
+void MainWindow::update_eye_diagram(const float *samples, size_t count) {
+  if (count != 64)
+    return; // Expect exactly one symbol period
+
+  static int trace_index = 0;
+  int graph_idx = trace_index % 20; // Cycle through 20 graphs
+
+  // Clear and update this graph's data
+  _eye_diagram_plot->graph(graph_idx)->data()->clear();
+
+  QVector<double> x(count), y(count);
+  for (size_t i = 0; i < count; ++i) {
+    x[i] = i;
+    y[i] = samples[i];
+  }
+
+  _eye_diagram_plot->graph(graph_idx)->setData(x, y);
+
+  trace_index++;
+
+  // Replot every 5 traces to reduce CPU usage
+  if (trace_index % 5 == 0) {
+    _eye_diagram_plot->replot();
   }
 }

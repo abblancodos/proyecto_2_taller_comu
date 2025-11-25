@@ -102,6 +102,7 @@ dsp_client::dsp_client()
       _recovered_audio_buffer(48000) // Buffer de 1 segundo
       ,
       _symbol_counter(0) {
+
   // Initialize queue indices
   _queue_head.store(0);
   _queue_tail.store(0);
@@ -213,9 +214,13 @@ bool dsp_client::init_subclass() {
       _tx_fsk4_frequencies[0], _tx_fsk4_frequencies[1], _tx_fsk4_frequencies[2],
       _tx_fsk4_frequencies[3], sample_rate(), buffer_size(), 10);
 
+  // CRITICAL: RX detector must use 64 samples (symbol period), not 1024 (JACK
+  // buffer) TX sends 1 symbol every 64 samples @ 48kHz
+  constexpr size_t SAMPLES_PER_SYMBOL = 64;
+
   _rx_fsk4_detector = std::make_unique<fsk4_detector>(
       _rx_fsk4_frequencies[0], _rx_fsk4_frequencies[1], _rx_fsk4_frequencies[2],
-      _rx_fsk4_frequencies[3], sample_rate(), buffer_size(), 10);
+      _rx_fsk4_frequencies[3], sample_rate(), SAMPLES_PER_SYMBOL, 10);
 
   std::cout << "TX FSK frequencies: " << _tx_fsk4_frequencies[0] << ", "
             << _tx_fsk4_frequencies[1] << ", " << _tx_fsk4_frequencies[2]
@@ -224,6 +229,10 @@ bool dsp_client::init_subclass() {
   std::cout << "RX FSK frequencies: " << _rx_fsk4_frequencies[0] << ", "
             << _rx_fsk4_frequencies[1] << ", " << _rx_fsk4_frequencies[2]
             << ", " << _rx_fsk4_frequencies[3] << " Hz\n";
+
+  std::cout << "[DSP] RX Goertzel configured for " << SAMPLES_PER_SYMBOL
+            << " samples/symbol (symbol rate: "
+            << (sample_rate() / SAMPLES_PER_SYMBOL) << " Hz)\n";
 
   return true;
 }
@@ -558,46 +567,53 @@ bool dsp_client::process(jack_nframes_t nframes, const sample_t *const in,
 // ============================================================================
 
 /*
-void dsp_client::process_fsk4_rx(const sample_t* in, std::size_t nframes) {
-  if (!_rx_fsk4_detector) {
+void dsp_client::process_fsk4_rx(const sample_t *in, std::size_t nframes) {
+  if (!_fsk4_detector) {
     return;
   }
 
-  // Detectar frecuencias FSK
-  _rx_fsk4_detector->process_block(in, nframes);
+  // CRITICAL: Process in 64-sample chunks to match TX symbol period
+  constexpr size_t SAMPLES_PER_SYMBOL = 64;
+  static std::vector<float> chunk_buffer;
+  static size_t chunk_index = 0;
 
-  // Obtener magnitudes y s�mbolo m�s fuerte
-  auto mags = _rx_fsk4_detector->get_current_magnitudes_squared();
-  int strongest = _rx_fsk4_detector->get_strongest_frequency_index();
+  if (chunk_buffer.empty()) {
+    chunk_buffer.resize(SAMPLES_PER_SYMBOL);
+  }
 
-  // Actualizar buffer at�mico para visualizaci�n
-  int write_idx = 1 - _fsk4_current_buffer.load();
-  _fsk4_buffer[write_idx].magnitudes =
-_rx_fsk4_detector->get_current_magnitudes();
-  _fsk4_buffer[write_idx].magnitudes_sq = mags;
-  _fsk4_buffer[write_idx].strongest_index = strongest;
-  _fsk4_current_buffer.store(write_idx);
-  _fsk4_block_counter.fetch_add(1);
+  for (std::size_t i = 0; i < nframes; ++i) {
+    // Accumulate samples into 64-sample chunks
+    chunk_buffer[chunk_index++] = in[i];
 
-  // A�ADIR: Enviar s�mbolo al controlador de recepci�n
-  if (_rx_controller) {
-    _rx_controller->add_symbol(strongest);
+    // When we have 64 samples, process them as one symbol period
+    if (chunk_index >= SAMPLES_PER_SYMBOL) {
+      // Run Goertzel on this 64-sample chunk
+      _fsk4_detector->process_block(chunk_buffer.data(), SAMPLES_PER_SYMBOL);
 
-    // Verificar si hay audio recuperado
-    if (_rx_controller->has_audio_ready()) {
-      std::vector<float> recovered;
-      _rx_controller->get_audio(recovered);
+      // Get magnitudes
+      auto magnitudes = _fsk4_detector->get_magnitudes();
+      auto magnitudes_sq = _fsk4_detector->get_power();
+      int strongest_index = _fsk4_detector->get_strongest_index();
 
-      // A�adir al buffer circular
-      for (float sample : recovered) {
-        _recovered_audio_buffer.push_back(sample);
+      // Store in atomic buffer
+      int next_buffer = 1 - _fsk4_current_buffer.load();
+      _fsk4_buffer[next_buffer].magnitudes = magnitudes;
+      _fsk4_buffer[next_buffer].magnitudes_sq = magnitudes_sq;
+      _fsk4_buffer[next_buffer].strongest_index = strongest_index;
+      _fsk4_current_buffer.store(next_buffer);
+
+      // Queue symbol for digital link processing
+      if (strongest_index >= 0 && strongest_index < 4) {
+        queue_rx_symbol(static_cast<uint8_t>(strongest_index));
       }
 
-      std::cout << "[RX] Audio recuperado: " << recovered.size()
-                << " muestras, buffer: " << _recovered_audio_buffer.size() <<
-std::endl;
+      // Reset chunk
+      chunk_index = 0;
+      _fsk4_detector->reset();
     }
   }
+
+  _fsk4_block_counter.fetch_add(1, std::memory_order_relaxed);
 }
 */
 
@@ -617,32 +633,56 @@ void dsp_client::process_fsk4_rx(const sample_t *in, std::size_t nframes) {
     return;
   }
 
-  // Procesar UNA vez el bloque completo
-  _rx_fsk4_detector->process_block(in, nframes);
+  // CRITICAL: Process in 64-sample chunks to match TX symbol period
+  // TX sends 1 symbol every 64 samples, RX must detect at same rate
+  constexpr size_t SAMPLES_PER_SYMBOL = 64;
+  static std::vector<float> chunk_buffer;
+  static size_t chunk_index = 0;
 
-  // NUEVO: Obtener símbolo detectado y actualizar buffer atómico
-  auto mags = _rx_fsk4_detector->get_current_magnitudes_squared();
-  int strongest = _rx_fsk4_detector->get_strongest_frequency_index();
-
-  // Actualizar buffer atómico para GUI (lock-free)
-  int write_idx = 1 - _fsk4_current_buffer.load();
-  _fsk4_buffer[write_idx].magnitudes =
-      _rx_fsk4_detector->get_current_magnitudes();
-  _fsk4_buffer[write_idx].magnitudes_sq = mags;
-  _fsk4_buffer[write_idx].strongest_index = strongest;
-  _fsk4_current_buffer.store(write_idx);
-  _fsk4_block_counter.fetch_add(1);
-
-  // NEW: Push to symbol queue
-  size_t head = _queue_head.load(std::memory_order_relaxed);
-  size_t next_head = (head + 1) % SYMBOL_QUEUE_SIZE;
-
-  if (next_head != _queue_tail.load(std::memory_order_acquire)) {
-    _symbol_queue[head] = static_cast<uint8_t>(strongest);
-    _queue_head.store(next_head, std::memory_order_release);
-  } else {
-    // Queue full - drop symbol (should warn?)
+  if (chunk_buffer.empty()) {
+    chunk_buffer.resize(SAMPLES_PER_SYMBOL);
   }
+
+  // Process 1024 samples → detect 16 symbols (1024/64 = 16)
+  for (std::size_t i = 0; i < nframes; ++i) {
+    // Accumulate samples into 64-sample chunks
+    chunk_buffer[chunk_index++] = in[i];
+
+    // When we have 64 samples, process them as one symbol period
+    if (chunk_index >= SAMPLES_PER_SYMBOL) {
+      // CRITICAL FIX: Reset BEFORE processing to ensure clean state
+      _rx_fsk4_detector->reset();
+
+      // Run Goertzel on this 64-sample chunk
+      _rx_fsk4_detector->process_block(chunk_buffer.data(), SAMPLES_PER_SYMBOL);
+
+      // Get results
+      auto mags = _rx_fsk4_detector->get_current_magnitudes_squared();
+      int strongest = _rx_fsk4_detector->get_strongest_frequency_index();
+
+      // Update atomic buffer for GUI (lock-free)
+      int write_idx = 1 - _fsk4_current_buffer.load();
+      _fsk4_buffer[write_idx].magnitudes =
+          _rx_fsk4_detector->get_current_magnitudes();
+      _fsk4_buffer[write_idx].magnitudes_sq = mags;
+      _fsk4_buffer[write_idx].strongest_index = strongest;
+      _fsk4_current_buffer.store(write_idx);
+
+      // Queue symbol for digital link processing
+      size_t head = _queue_head.load(std::memory_order_relaxed);
+      size_t next_head = (head + 1) % SYMBOL_QUEUE_SIZE;
+
+      if (next_head != _queue_tail.load(std::memory_order_acquire)) {
+        _symbol_queue[head] = static_cast<uint8_t>(strongest);
+        _queue_head.store(next_head, std::memory_order_release);
+      }
+
+      // Reset chunk index for next symbol
+      chunk_index = 0;
+    }
+  }
+
+  _fsk4_block_counter.fetch_add(1);
 }
 
 std::vector<uint8_t> dsp_client::get_rx_symbols() {
@@ -707,6 +747,20 @@ void dsp_client::process_fsk4_tx(sample_t *out, std::size_t nframes) {
 
     if (_fsk_tx.phase > 2.0f * std::numbers::pi_v<float>) {
       _fsk_tx.phase -= 2.0f * std::numbers::pi_v<float>;
+    }
+
+    // Capture I/Q for constellation (every 4th sample to reduce data)
+    if (i % 4 == 0) {
+      std::lock_guard<std::mutex> lock(_iq_mutex);
+      IQSample iq;
+      iq.I = std::cos(_fsk_tx.phase); // In-phase
+      iq.Q = std::sin(_fsk_tx.phase); // Quadrature
+      _iq_samples.push_back(iq);
+
+      // Keep buffer size limited
+      if (_iq_samples.size() > MAX_IQ_SAMPLES) {
+        _iq_samples.erase(_iq_samples.begin(), _iq_samples.begin() + 500);
+      }
     }
 
     _fsk_tx.samples_in_symbol++;

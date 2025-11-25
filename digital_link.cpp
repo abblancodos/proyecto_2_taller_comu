@@ -375,14 +375,46 @@ void DigitalLink::process_rx_symbol(uint8_t symbol) {
   if (_frame_complete)
     return;
 
+  // [RX STAGE 1] Symbol Reception
+  static bool stage1_logged = false;
+  if (!stage1_logged) {
+    std::cout << "\n========================================\n";
+    std::cout << "[RX STAGE 1] Starting symbol reception\n";
+    std::cout << "========================================\n";
+    stage1_logged = true;
+  }
+
   _rx_symbol_buffer.push_back(symbol);
 
   // Aún no hay chance de preámbulo completo
   if (_rx_symbol_buffer.size() < PacketFrame::PREAMBLE_LENGTH)
     return;
 
+  // [RX STAGE 2] Preamble Search
+  static size_t last_buffer_size = 0;
   int preamble_idx = PacketFrame::find_preamble(_rx_symbol_buffer);
-  if (preamble_idx < 0) {
+
+  if (preamble_idx == -1) {
+    // Preamble not found yet
+    if (_rx_symbol_buffer.size() % 50 == 0 &&
+        _rx_symbol_buffer.size() != last_buffer_size) {
+      std::cout << "[RX STAGE 2] Searching for preamble... (buffer: "
+                << _rx_symbol_buffer.size() << " symbols)\n";
+
+      // DEBUG: Show last 40 symbols to see pattern
+      std::cout << "[RX DEBUG] Last 40 symbols: ";
+      size_t start =
+          (_rx_symbol_buffer.size() >= 40) ? _rx_symbol_buffer.size() - 40 : 0;
+      for (size_t i = start; i < _rx_symbol_buffer.size(); ++i) {
+        std::cout << (int)_rx_symbol_buffer[i];
+        if (i < _rx_symbol_buffer.size() - 1)
+          std::cout << " ";
+      }
+      std::cout << "\n";
+      std::cout << "[RX DEBUG] Expected preamble: 0 1 2 3 0 1 2 3 0 1 2 3... "
+                   "(32 symbols)\n";
+      last_buffer_size = _rx_symbol_buffer.size();
+    }
     // Evitar crecimiento infinito del buffer
     if (_rx_symbol_buffer.size() > 100000) {
       _rx_symbol_buffer.erase(_rx_symbol_buffer.begin(),
@@ -390,6 +422,11 @@ void DigitalLink::process_rx_symbol(uint8_t symbol) {
     }
     return;
   }
+
+  // [RX STAGE 3] Preamble Detected!
+  std::cout << "\n[RX STAGE 3] ✓ Preamble detected!\n";
+  std::cout << "  Index: " << preamble_idx << "\n";
+  std::cout << "  Buffer size: " << _rx_symbol_buffer.size() << " symbols\n";
 
   // --- Tenemos preámbulo detectado ---
   size_t start = (size_t)preamble_idx;
@@ -453,8 +490,18 @@ void DigitalLink::process_rx_symbol(uint8_t symbol) {
   PacketFrame::Header header =
       PacketFrame::Header::from_bytes(header_bytes.data());
 
-  if (!header.is_valid())
+  if (!header.is_valid()) {
+    std::cout << "[RX STAGE 4] Header validation failed - false preamble\n";
     return; // era falso preámbulo
+  }
+
+  // [RX STAGE 4] Header Extracted
+  std::cout << "[RX STAGE 4] ✓ Header extracted and validated\n";
+  std::cout << "  Sample rate: " << header.sample_rate << " Hz\n";
+  std::cout << "  Channels: " << (int)header.channels << "\n";
+  std::cout << "  Payload length: " << header.payload_length << " bytes\n";
+  std::cout << "  File type: " << (header.sample_rate == 0 ? "Binary" : "WAV")
+            << "\n";
 
   // 4) Calcular cuántos símbolos TOTAL tiene este frame completo
   size_t payload_syms = header.payload_length * 4;
@@ -477,8 +524,18 @@ void DigitalLink::process_rx_symbol(uint8_t symbol) {
   std::vector<uint8_t> payload_bits;
   PacketFrame::Header final_header;
 
-  if (!PacketFrame::extract_payload(full_frame, final_header, payload_bits))
+  if (!PacketFrame::extract_payload(full_frame, final_header, payload_bits)) {
+    std::cout << "[RX STAGE 6] CRC validation FAILED - corrupted frame\n";
     return;
+  }
+
+  // [RX STAGE 6] CRC Validation
+  std::cout << "[RX STAGE 6] ✓ CRC validation PASSED\n";
+  std::cout << "  Payload bits: " << payload_bits.size() << "\n";
+
+  std::cout << "\n========================================\n";
+  std::cout << "[RX STAGE 7] ✓ FRAME COMPLETE!\n";
+  std::cout << "========================================\n";
 
   std::cout << "[DigitalLink] Frame detected and validated!\n";
 
